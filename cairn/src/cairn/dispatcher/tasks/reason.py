@@ -14,13 +14,13 @@ from cairn.dispatcher.prompting import (
 from cairn.dispatcher.protocol.client import CairnClient
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.runtime.containers import ContainerManager
+from cairn.dispatcher.runtime.execution import run_worker_process
 from cairn.dispatcher.runtime.heartbeat import HeartbeatLease
 from cairn.dispatcher.tasks.common import (
     best_effort_release_reason,
     cancel_reason,
     did_timeout,
     preview,
-    run_worker_process,
     task_healthcheck_enabled,
     write_graph_snapshot_reference,
 )

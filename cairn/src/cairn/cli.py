@@ -1,4 +1,8 @@
+import hashlib
+import json
 from pathlib import Path
+import signal
+import uuid
 
 import click
 import uvicorn
@@ -64,4 +68,69 @@ def dispatch(config_path: Path, once: bool, startup_healthcheck_only: bool, log_
             return
         loop.run(once=once)
     except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("audit-probe")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--file", "target_file", type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=Path), required=True)
+@click.option("--role", type=click.Choice(["builder", "reviewer"]), default="builder", show_default=True)
+@click.option("--output", "output_dir", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--timeout", type=click.IntRange(min=1), help="Agent timeout in seconds")
+def audit_probe(config_path: Path, target_file: Path, role: str, output_dir: Path | None, timeout: int | None):
+    """通过控制器和现有 harness 读取文件；CP1 不创建审计项目。"""
+    from cairn.controller.app import call_agent, file_probe_prompt
+    from cairn.controller.models import FileReadResult
+    from cairn.dispatcher.config import DispatchConfig, LocalConfig
+    from cairn.dispatcher.runtime.local_backend import LocalBackend
+
+    try:
+        config = DispatchConfig.load(config_path)
+        if config.controller is None:
+            raise ValueError("controller configuration is required")
+        if config.runtime.execution != "local":
+            raise ValueError("audit-probe requires local execution to read the supplied host file")
+        source_bytes = target_file.read_bytes()
+        original = source_bytes.decode("utf-8")
+        source_hash = hashlib.sha256(source_bytes).hexdigest()
+        if output_dir is None:
+            root = (Path(config.local.workspace_root) if config.local and config.local.workspace_root else Path("datas/controller-probes")).expanduser()
+            output_dir = root if root.is_absolute() else config_path.resolve().parent / root
+        backend = LocalBackend(LocalConfig(workspace_root=str(output_dir.expanduser().resolve())))
+        workspace = Path(backend.ensure_running("probe-" + uuid.uuid4().hex))
+        prompt = file_probe_prompt(target_file)
+        workspace.joinpath("input.json").write_text(json.dumps({
+            "file": str(target_file), "sha256": source_hash, "role": role, "prompt": prompt,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        def terminate(_signum, _frame):
+            raise KeyboardInterrupt("controller received SIGTERM")
+
+        previous = signal.signal(signal.SIGTERM, terminate)
+        try:
+            result = call_agent(
+                config, backend, role=role, prompt=prompt, result_model=FileReadResult,
+                workspace=workspace, timeout_seconds=timeout or config.controller.timeouts.build,
+                phase="controller_file_probe",
+            )
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            backend.close()
+        if result.status == "success":
+            try:
+                reported_path = Path(result.data["path"])
+                unchanged = target_file.read_bytes() == source_bytes
+                matches = reported_path.is_absolute() and reported_path.resolve() == target_file and result.data["content"] == original and unchanged
+            except (OSError, ValueError):
+                matches = False
+            if not matches:
+                result.status = "invalid_output"
+                result.error = "返回路径或内容与目标文件不匹配，或目标文件在执行期间变化"
+                result.data = None
+        receipt = workspace / "result.json"
+        receipt.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        click.echo(json.dumps({"status": result.status, "session": result.session, "receipt": str(receipt), "data": result.data}, ensure_ascii=False))
+        if result.status != "success":
+            raise click.ClickException(result.error or result.status)
+    except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc

@@ -1,0 +1,3 @@
+Cairn CP1 文件读取夹具
+marker: cairn-cp1-real-file-6b723ce5
+请保留这一行后的换行。

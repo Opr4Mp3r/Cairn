@@ -25,5 +25,13 @@ LOCAL_DRIVERS: dict[str, WorkerDriver] = {
 
 
 def get_driver(name: str, execution: str = "container") -> WorkerDriver:
-    drivers = LOCAL_DRIVERS if execution == "local" else DRIVERS
-    return drivers[name]
+    if execution == "local":
+        drivers = LOCAL_DRIVERS
+    elif execution == "container":
+        drivers = DRIVERS
+    else:
+        raise ValueError(f"unsupported execution mode: {execution}")
+    try:
+        return drivers[name]
+    except KeyError:
+        raise ValueError(f"worker {name!r} is not registered for {execution} execution") from None

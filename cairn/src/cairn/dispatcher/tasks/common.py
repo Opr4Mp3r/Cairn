@@ -5,14 +5,17 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from cairn.dispatcher.config import DispatchConfig, WorkerConfig
+from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.protocol.client import CairnClient
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.runtime.containers import ContainerManager
-from cairn.dispatcher.runtime.heartbeat import HeartbeatLease
+from cairn.dispatcher.runtime.execution import (
+    PROCESS_COMMUNICATE_GRACE_SECONDS as PROCESS_COMMUNICATE_GRACE_SECONDS,
+    communicate_timeout as communicate_timeout,
+    run_worker_process as run_worker_process,
+)
 from cairn.dispatcher.runtime.process import ProcessResult
 
-PROCESS_COMMUNICATE_GRACE_SECONDS = 15
 LOG_PREVIEW_LIMIT = 1200
 GRAPH_SNAPSHOT_ROOT = "/tmp/cairn-prompts"
 LOG = logging.getLogger(__name__)
@@ -43,10 +46,6 @@ def cancel_reason(result: ProcessResult, cancellation: TaskCancellation | None =
     return None
 
 
-def communicate_timeout(timeout_seconds: int, grace_seconds: int = PROCESS_COMMUNICATE_GRACE_SECONDS) -> int:
-    return timeout_seconds + grace_seconds
-
-
 def task_healthcheck_enabled(config: DispatchConfig) -> bool:
     if config.runtime.execution == "local":
         return False
@@ -68,44 +67,6 @@ def write_graph_snapshot_reference(
         "Before using the graph, read the entire file and treat its contents as the YAML snapshot "
         "for this Graph section."
     )
-
-
-def run_worker_process(
-    container_manager: ContainerManager,
-    container_name: str,
-    worker: WorkerConfig,
-    argv: list[str],
-    *,
-    phase: str,
-    timeout_seconds: int,
-    lease: HeartbeatLease | None = None,
-    cancellation: TaskCancellation | None = None,
-) -> ProcessResult:
-    LOG.info(
-        "starting container exec container=%s worker=%s phase=%s timeout=%ss",
-        container_name,
-        worker.name,
-        phase,
-        timeout_seconds,
-    )
-    process = container_manager.build_exec_process(
-        container_name,
-        dict(worker.env),
-        argv,
-        timeout_seconds=timeout_seconds,
-    )
-    process.start()
-    if lease is not None:
-        lease.attach_process(process)
-    if cancellation is not None:
-        cancellation.attach_process(process)
-    try:
-        return process.communicate(timeout=communicate_timeout(timeout_seconds))
-    finally:
-        if lease is not None:
-            lease.attach_process(None)
-        if cancellation is not None:
-            cancellation.attach_process(None)
 
 
 def project_allows_conclude_fallback(client: CairnClient, project_id: str, *, worker_name: str, intent_id: str) -> bool:

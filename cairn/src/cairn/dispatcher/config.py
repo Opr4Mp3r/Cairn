@@ -204,6 +204,50 @@ class WorkerConfig(BaseModel):
         return self
 
 
+class ControllerRoles(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    builder: str = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+
+
+class ControllerTimeouts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    build: int = Field(default=180, gt=0)
+    preflight: int = Field(default=120, gt=0)
+    seed_review: int = Field(default=120, gt=0)
+    overseer: int = Field(default=90, gt=0)
+    closing: int = Field(default=60, gt=0)
+    final_review: int = Field(default=60, gt=0)
+
+
+class ControllerReviewConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_attempts: int = Field(default=2, gt=0)
+
+
+class ControllerBudgetConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    research_seconds: int = Field(default=1800, gt=0)
+    drain_seconds: int = Field(default=120, gt=0)
+    final_review_seconds: int = Field(default=360, gt=0)
+
+
+class ControllerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    roles: ControllerRoles
+    research_prompt_group: str | None = None
+    poll_interval: int = Field(default=3, gt=0)
+    max_goal_revisions: int = Field(default=2, ge=0)
+    timeouts: ControllerTimeouts = Field(default_factory=ControllerTimeouts)
+    review: ControllerReviewConfig = Field(default_factory=ControllerReviewConfig)
+    budget: ControllerBudgetConfig = Field(default_factory=ControllerBudgetConfig)
+
+
 class DispatchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -214,6 +258,7 @@ class DispatchConfig(BaseModel):
     local: LocalConfig | None = None
     common_env: dict[str, str] = Field(default_factory=dict)
     workers: list[WorkerConfig]
+    controller: ControllerConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -254,6 +299,14 @@ class DispatchConfig(BaseModel):
             raise ValueError("workers must not be empty")
         if self.runtime.max_project_workers > self.runtime.max_workers:
             raise ValueError("max_project_workers cannot exceed max_workers")
+        if self.controller is not None:
+            from cairn.dispatcher.workers.registry import get_driver
+
+            by_name = {worker.name: worker for worker in self.workers}
+            for role, name in self.controller.roles.model_dump().items():
+                if name not in by_name:
+                    raise ValueError(f"controller role {role} references unknown worker {name!r}")
+                get_driver(by_name[name].type, self.runtime.execution)
         return self
 
     @model_validator(mode="after")
@@ -276,6 +329,8 @@ class DispatchConfig(BaseModel):
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         config = cls.model_validate(data)
         validate_prompt_resources(config.runtime.prompt_group)
+        if config.controller is not None and config.controller.research_prompt_group is not None:
+            validate_prompt_resources(config.controller.research_prompt_group)
         return config
 
 
