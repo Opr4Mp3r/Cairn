@@ -283,6 +283,10 @@ class DispatcherLoop:
                 project.project.status,
             )
             return False
+        if project.project.audit is not None and project.project.audit.completion_pending:
+            self._log_changed(f"{skip_scope}:completion_pending", logging.INFO,
+                              "pause research project=%s while independent completion review is pending", summary.id)
+            return False
         if self._is_initial_project(project):
             if project.project.reason is not None:
                 return False

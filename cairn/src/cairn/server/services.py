@@ -18,7 +18,35 @@ def json_text(value) -> str:
 
 def audit_metadata(conn: sqlite3.Connection, project_id: str) -> AuditMetadata | None:
     row = conn.execute("SELECT metadata_json FROM audits WHERE project_id = ?", (project_id,)).fetchone()
-    return AuditMetadata.model_validate_json(row["metadata_json"]) if row is not None else None
+    if row is None:
+        return None
+    metadata = AuditMetadata.model_validate_json(row["metadata_json"])
+    metadata.completion_pending = has_pending_completion(conn, project_id)
+    return metadata
+
+
+def has_pending_completion(conn: sqlite3.Connection, project_id: str) -> bool:
+    rows = conn.execute("SELECT data_json FROM audit_completions WHERE project_id=?", (project_id,)).fetchall()
+    now = utcnow()
+    for row in rows:
+        request = json.loads(row["data_json"])
+        if request["status"] not in ("pending", "stale", "review_error"):
+            continue
+        deadline = request["round_deadline"]
+        if deadline is None:
+            return True
+        if now >= deadline:
+            continue
+        if request["review_token"] and request["attempt_deadline"] and now < request["attempt_deadline"]:
+            return True  # 最后一次审核仍在执行时继续暂停，不因 attempts 到上限抢先派发。
+        if request["attempts"] < request["max_attempts"]:
+            return True
+    return False
+
+
+def check_new_research_allowed(conn: sqlite3.Connection, project_id: str) -> None:
+    if get_project_or_404(conn, project_id)["mode"] == "audit" and has_pending_completion(conn, project_id):
+        raise HTTPException(409, "Audit completion is awaiting independent review; new research is paused")
 
 
 def save_audit_metadata(conn: sqlite3.Connection, metadata: AuditMetadata) -> None:

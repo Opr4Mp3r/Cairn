@@ -243,7 +243,7 @@ def create_local_audit(
             raise ValueError(cancellation.reason or "cancelled after activation")
         summary = {"status": "active", "project_id": project.project.id, "workspace": str(workspace),
                    "controller_run": str(run_dir), "baseline": baseline["digest"],
-                   "note": "CP3 creates and activates research; Overseer, final approval and budget lifecycle are not implemented."}
+                   "note": "Audit activated; CP4 supports Overseer/final review. Draining, closing and full recovery remain CP5."}
         (run_dir / "project.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         if cancellation.is_cancelled:
             raise ValueError(cancellation.reason or "cancelled during handover")

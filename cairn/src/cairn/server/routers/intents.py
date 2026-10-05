@@ -11,6 +11,8 @@ from cairn.server.models import (
 )
 from cairn.server.services import (
     check_project_active,
+    check_new_research_allowed,
+    get_project_or_404,
     bump_audit_revision,
     fact_to_model,
     get_claimable_open_intent_or_404,
@@ -35,7 +37,10 @@ router = APIRouter(tags=["intents"])
 )
 def create_intent(project_id: str, body: CreateIntentRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
         check_project_active(conn, project_id)
+        check_new_research_allowed(conn, project_id)
         validate_facts_exist(conn, project_id, body.from_)
         validate_goal_not_in_sources(body.from_)
         validate_intent_creator_worker(body.creator, body.worker)
@@ -81,8 +86,12 @@ def create_intent(project_id: str, body: CreateIntentRequest):
 )
 def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
         check_project_active(conn, project_id)
-        get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        row = get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        if row["worker"] is None:
+            check_new_research_allowed(conn, project_id)
 
         now = utcnow()
         conn.execute(
@@ -125,8 +134,12 @@ def release(project_id: str, intent_id: str, body: HeartbeatRequest):
 )
 def conclude(project_id: str, intent_id: str, body: ConcludeRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
         project = check_project_active(conn, project_id)
-        get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        claimed = get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        if claimed["worker"] is None:
+            check_new_research_allowed(conn, project_id)
 
         now = utcnow()
         fid = next_fact_id(conn, project_id)

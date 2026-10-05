@@ -105,6 +105,15 @@ CREATE TABLE IF NOT EXISTS audit_records (
     PRIMARY KEY (project_id, id),
     UNIQUE (project_id, record_key)
 );
+
+CREATE TABLE IF NOT EXISTS audit_completions (
+    id TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES audits(project_id) ON DELETE CASCADE,
+    source_key TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    PRIMARY KEY (project_id, id),
+    UNIQUE (project_id, source_key)
+);
 """
 
 

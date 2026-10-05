@@ -204,7 +204,8 @@ def run_reason_task(
             )
             return "rejected"
         if kind == "complete":
-            response = client.complete(project.project.id, data["from"], data["description"], worker.name)
+            kwargs = {"source_session": session} if project.project.mode == "audit" else {}
+            response = client.complete(project.project.id, data["from"], data["description"], worker.name, **kwargs)
             if response.status_code == 403:
                 LOG.info("project became inactive during reason complete project=%s worker=%s", project.project.id, worker.name)
                 return "success"
@@ -218,7 +219,7 @@ def run_reason_task(
                 )
                 return "failed"
             LOG.info(
-                "project completed project=%s worker=%s from=%s execute_ms=%s total_ms=%s",
+                "completion request processed project=%s worker=%s from=%s execute_ms=%s total_ms=%s",
                 project.project.id,
                 worker.name,
                 data["from"],

@@ -10,7 +10,13 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Response
 
 from cairn.server.db import get_conn
-from cairn.server.models import AuditDetail, AuditMetadata, AuditRecord, AuditRecordRequest, CreateAuditRequest, ProjectDetail
+from cairn.server.models import (AuditCompletion, AuditDetail, AuditMetadata, AuditRecord, AuditRecordRequest,
+                                CompletionClaimRequest, CompletionReviewRequest, CreateAuditRequest, ProjectDetail)
+from cairn.server.audit_review import (
+    apply_node_review, claim_completion, completion_by_id, finish_completion,
+    list_completions, node_input, store_record,
+)
+from cairn.audit_evidence import json_digest
 from cairn.server.services import (
     audit_metadata, build_intents, fact_to_model, get_project_or_404, json_text,
     next_fact_id, next_hint_id, next_intent_id, next_project_id, next_review_id, project_meta_from_row,
@@ -179,16 +185,48 @@ def record_review(project_id: str, body: AuditRecordRequest, response: Response)
             exists = conn.execute(f"SELECT 1 FROM {table} WHERE project_id = ? AND id = ?", (project_id, body.object_id)).fetchone() is not None
         if not exists:
             raise HTTPException(404, "Review target not found in this audit")
-        existing = conn.execute("SELECT record_json FROM audit_records WHERE project_id = ? AND record_key = ?", (project_id, body.record_key)).fetchone()
-        if existing is not None:
-            record = AuditRecord.model_validate_json(existing["record_json"])
-            if json_text(record.model_dump(mode="json", exclude={"id", "created_at"})) != json_text(body.model_dump(mode="json")):
-                raise HTTPException(409, "Review record_key was used for different content")
+        record, created = store_record(conn, project_id, body)
+        if not created:
             response.status_code = 200
             return record
-        record = AuditRecord(**body.model_dump(), id=next_review_id(conn, project_id), created_at=utcnow())
-        conn.execute("INSERT INTO audit_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (
-            record.id, project_id, record.record_key, record.object_type, record.object_id, record.phase,
-            record.input_digest, json_text(record.model_dump(mode="json")),
-        ))
+        if body.phase == "final_review":
+            raise HTTPException(400, "Final review must use its completion request endpoint")
+        metadata = _audit_or_404(conn, project_id)
+        if body.phase == "overseer":
+            if get_project_or_404(conn, project_id)["status"] != "active":
+                raise HTTPException(403, "Overseer requires an active audit")
+        apply_node_review(conn, metadata, body)
+        if body.phase == "overseer" and body.attempt_status == "success":
+            record.output_digest = json_digest(node_input(conn, metadata, body.object_type, body.object_id))
+            conn.execute("UPDATE audit_records SET record_json=? WHERE project_id=? AND id=?",
+                         (json_text(record.model_dump(mode="json")), project_id, record.id))
         return record
+
+
+@router.get("/projects/{project_id}/audit/nodes/{object_type}/{object_id}")
+def review_input(project_id: str, object_type: str, object_id: str):
+    with get_conn() as conn:
+        metadata = _audit_or_404(conn, project_id)
+        context = node_input(conn, metadata, object_type, object_id)
+        return {"input_digest": json_digest(context), "context": context}
+
+
+@router.get("/projects/{project_id}/audit/completions", response_model=list[AuditCompletion])
+def completions(project_id: str):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return list_completions(conn, _audit_or_404(conn, project_id))
+
+
+@router.post("/projects/{project_id}/audit/completions/{request_id}/claim", response_model=AuditCompletion)
+def claim_review(project_id: str, request_id: str, body: CompletionClaimRequest):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return claim_completion(conn, _audit_or_404(conn, project_id), completion_by_id(conn, project_id, request_id), body)
+
+
+@router.post("/projects/{project_id}/audit/completions/{request_id}/review", response_model=AuditCompletion)
+def completion_review(project_id: str, request_id: str, body: CompletionReviewRequest):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return finish_completion(conn, _audit_or_404(conn, project_id), completion_by_id(conn, project_id, request_id), body)

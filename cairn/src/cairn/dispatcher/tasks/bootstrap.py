@@ -189,6 +189,7 @@ def run_bootstrap_task(
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
                 audit=audit,
+                source_session=session if project.project.mode == "audit" else None,
             )
         if did_timeout(first):
             LOG.warning(
@@ -418,6 +419,7 @@ def _write_bootstrap_complete_result(
     phase_ms: int,
     total_ms: int | None = None,
     audit=None,
+    source_session=None,
 ) -> str:
     conclude = write_conclude_result_with_fact_id(
         client,
@@ -442,7 +444,8 @@ def _write_bootstrap_complete_result(
         )
         return "success"
 
-    response = client.complete(project_id, [conclude.fact_id], complete_description, worker_name)
+    kwargs = {"source_session": source_session} if source_session is not None else {}
+    response = client.complete(project_id, [conclude.fact_id], complete_description, worker_name, **kwargs)
     if response.status_code in (403, 409):
         LOG.info(
             "bootstrap complete deferred project=%s intent=%s worker=%s source=%s status=%s fact_id=%s",

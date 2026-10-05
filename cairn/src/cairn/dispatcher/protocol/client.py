@@ -9,7 +9,8 @@ from pydantic import TypeAdapter
 import requests
 from requests.adapters import HTTPAdapter
 
-from cairn.server.models import AuditDetail, AuditRecordRequest, CreateAuditRequest, Intent, ProjectDetail, ProjectSummary, Settings
+from cairn.server.models import (AuditCompletion, AuditDetail, AuditRecordRequest, CompletionClaimRequest,
+                                CompletionReviewRequest, CreateAuditRequest, Intent, ProjectDetail, ProjectSummary, Settings)
 
 LOG = logging.getLogger(__name__)
 
@@ -77,6 +78,22 @@ class CairnClient:
     def record_audit_review(self, project_id: str, request: AuditRecordRequest) -> ApiResult:
         return self._request_json("POST", f"/projects/{project_id}/audit/reviews", request.model_dump(mode="json"))
 
+    def get_review_input(self, project_id: str, object_type: str, object_id: str) -> dict:
+        response = self._session().get(self._url(f"/projects/{project_id}/audit/nodes/{object_type}/{object_id}"), timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def list_completions(self, project_id: str) -> list[AuditCompletion]:
+        response = self._session().get(self._url(f"/projects/{project_id}/audit/completions"), timeout=self._timeout)
+        response.raise_for_status()
+        return [AuditCompletion.model_validate(item) for item in response.json()]
+
+    def claim_completion(self, project_id: str, request_id: str, request: CompletionClaimRequest) -> ApiResult:
+        return self._request_json("POST", f"/projects/{project_id}/audit/completions/{request_id}/claim", request.model_dump(mode="json"))
+
+    def review_completion(self, project_id: str, request_id: str, request: CompletionReviewRequest) -> ApiResult:
+        return self._request_json("POST", f"/projects/{project_id}/audit/completions/{request_id}/review", request.model_dump(mode="json"))
+
     def export_project(self, project_id: str) -> str:
         response = self._session().get(
             self._url(f"/projects/{project_id}/export"),
@@ -134,11 +151,14 @@ class CairnClient:
             json=payload,
         )
 
-    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str) -> ApiResult:
+    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str, source_session: str | None = None) -> ApiResult:
+        payload = {"from": from_ids, "description": description, "worker": worker}
+        if source_session is not None:
+            payload["source_session"] = source_session
         return self._request_json(
             "POST",
             f"/projects/{project_id}/complete",
-            json={"from": from_ids, "description": description, "worker": worker},
+            json=payload,
         )
 
     def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:

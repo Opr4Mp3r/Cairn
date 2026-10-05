@@ -66,6 +66,7 @@ class AuditMetadata(BaseModel):
     budget: AuditBudget
     seed_ids: dict[str, str]
     phase: Literal["preparing", "researching"] = "preparing"
+    completion_pending: bool = False
     audit_revision: int = 1
     reason_revision: int = 1
     started_at: str | None = None
@@ -269,6 +270,7 @@ class CompleteRequest(BaseModel):
     from_: list[str] = Field(alias="from", min_length=1)
     description: str
     worker: str
+    source_session: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -407,6 +409,8 @@ class AuditRecordRequest(BaseModel):
     result: dict[str, JsonValue] | None = None
     artifacts: list[str] = Field(default_factory=list)
     usage: dict[str, JsonValue] | None = None
+    fact_audit: AuditFactData | None = None
+    hint: str | None = Field(default=None, min_length=1)
 
     @field_validator("record_key", "object_id", "phase")
     @classmethod
@@ -418,7 +422,7 @@ class AuditRecordRequest(BaseModel):
     @model_validator(mode="after")
     def validate_attempt(self) -> "AuditRecordRequest":
         if self.attempt_status == "error":
-            if not self.error or not self.error.strip() or self.decision is not None:
+            if not self.error or not self.error.strip() or self.decision is not None or self.fact_audit is not None or self.hint is not None:
                 raise ValueError("an error attempt requires an error and cannot contain a decision")
         elif self.error is not None:
             raise ValueError("a successful attempt cannot contain an error")
@@ -428,7 +432,108 @@ class AuditRecordRequest(BaseModel):
 class AuditRecord(AuditRecordRequest):
     id: str
     created_at: str
+    output_digest: str | None = None
 
 
 class AuditDetail(AuditMetadata):
     records: list[AuditRecord] = Field(default_factory=list)
+
+
+class PolicyChecks(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    effect: bool
+    deployment: bool
+    attacker_capabilities: bool
+    scope: bool
+    cvss: bool
+    evidence: bool
+
+
+class CVSSVector(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    AV: Literal["N", "A", "L", "P"]
+    AC: Literal["L", "H"]
+    PR: Literal["N", "L", "H"]
+    UI: Literal["N", "R"]
+    S: Literal["U", "C"]
+    C: Literal["N", "L", "H"]
+    I: Literal["N", "L", "H"]
+    A: Literal["N", "L", "H"]
+
+
+class FinalAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approved", "rejected", "needs_evidence"]
+    reason: str = Field(min_length=1)
+    proof_ids: list[str] = Field(min_length=1)
+    checks: PolicyChecks
+    cvss_vector: CVSSVector | None = None
+
+    @model_validator(mode="after")
+    def validate_approval(self):
+        if not self.reason.strip() or len(self.proof_ids) != len(set(self.proof_ids)):
+            raise ValueError("review reason and unique proof_ids are required")
+        if self.decision == "approved" and not all(self.checks.model_dump().values()):
+            raise ValueError("approval requires every fixed policy check")
+        return self
+
+
+class AuditCompletion(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    project_id: str
+    from_: list[str] = Field(alias="from")
+    description: str
+    worker: str
+    source_session: str | None = None
+    proof_digest: str
+    policy_digest: str
+    baseline_digest: str
+    audit_revision: int
+    status: Literal["pending", "stale", "review_error", "approved", "rejected", "needs_evidence"] = "pending"
+    created_at: str
+    updated_at: str
+    attempts: int = 0
+    max_attempts: int = 2
+    round_deadline: str | None = None
+    attempt_deadline: str | None = None
+    review_token: str | None = None
+    review_owner: str | None = None
+    review_session: str | None = None
+    decision: Literal["approved", "rejected", "needs_evidence"] | None = None
+    error: str | None = None
+
+
+class CompletionClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner: str = Field(min_length=1)
+    max_attempts: int = Field(default=2, gt=0)
+    timeout_seconds: int = Field(default=60, gt=0)
+    retry: bool = False
+
+
+class CompletionReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1)
+    expected_audit_revision: int
+    policy_digest: str
+    proof_digest: str
+    record: AuditRecordRequest
+    assessment: FinalAssessment | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self):
+        if self.record.phase != "final_review" or self.record.object_type != "project":
+            raise ValueError("completion review must be a final_review project record")
+        if self.record.attempt_status == "error":
+            if self.assessment is not None:
+                raise ValueError("execution error cannot contain a verdict")
+        elif self.assessment is None or self.record.decision != self.assessment.decision:
+            raise ValueError("successful review requires a matching assessment and decision")
+        return self

@@ -356,7 +356,7 @@ def test_audit_cli_resolves_workspace_relative_to_configuration(api, tmp_path, m
     config_path = tmp_path / "config.json"
     config_path.write_text(config.model_dump_json())
     monkeypatch.setattr("cairn.dispatcher.protocol.client.CairnClient", lambda _url: client)
-    result = CliRunner().invoke(main, ["audit", "--config", str(config_path), "--repo", str(repo), "--goal", "trace anonymous entry"])
+    result = CliRunner().invoke(main, ["audit", "--once", "--config", str(config_path), "--repo", str(repo), "--goal", "trace anonymous entry"])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert Path(data["workspace"]).parent == tmp_path / "relative-work"

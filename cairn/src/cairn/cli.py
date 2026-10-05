@@ -138,15 +138,20 @@ def audit_probe(config_path: Path, target_file: Path, role: str, output_dir: Pat
 
 @main.command("audit")
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
-@click.option("--repo", type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path), required=True)
-@click.option("--goal", required=True)
+@click.option("--repo", type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path))
+@click.option("--goal")
+@click.option("--project", "project_id", help="连接已有审计项目运行 Overseer 与终审；不重建项目")
+@click.option("--once", is_flag=True, help="新建时只激活；连接已有项目时只执行一轮复核")
+@click.option("--retry-review", help="显式重试审核执行错误或失效申请，不重置项目期限")
 @click.option("--reference", "references", type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=Path), multiple=True)
 @click.option("--seeds", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-def audit(config_path: Path, repo: Path, goal: str, references: tuple[Path, ...], seeds: Path | None):
-    """构建、复核并激活本地审计项目；CP3 不运行后续 Overseer 或终审。"""
+def audit(config_path: Path, repo: Path | None, goal: str | None, project_id: str | None,
+          once: bool, retry_review: str | None, references: tuple[Path, ...], seeds: Path | None):
+    """创建或连接本地审计项目，运行独立 Overseer 和完成验收。"""
     import requests
 
     from cairn.controller.audit import create_local_audit
+    from cairn.controller.monitor import monitor_audit
     from cairn.dispatcher.config import DispatchConfig, LocalConfig
     from cairn.dispatcher.protocol.client import CairnClient
     from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -156,6 +161,11 @@ def audit(config_path: Path, repo: Path, goal: str, references: tuple[Path, ...]
     previous = None
     cancellation = TaskCancellation()
     try:
+        if project_id:
+            if repo is not None or goal is not None or references or seeds is not None:
+                raise ValueError("--project cannot be combined with new audit inputs")
+        elif repo is None or goal is None or retry_review is not None:
+            raise ValueError("new audit requires --repo and --goal; --retry-review requires --project")
         config = DispatchConfig.load(config_path)
         root = Path(config.local.workspace_root if config.local and config.local.workspace_root else "datas/audit-workspaces").expanduser()
         root = root.resolve() if root.is_absolute() else (config_path.resolve().parent / root).resolve()
@@ -163,16 +173,26 @@ def audit(config_path: Path, repo: Path, goal: str, references: tuple[Path, ...]
         client = CairnClient(config.server)
 
         def terminate(_signum, _frame):
+            cancellation.cancel("controller received SIGTERM")
             raise KeyboardInterrupt("controller received SIGTERM")
 
         previous = signal.signal(signal.SIGTERM, terminate)
-        result = create_local_audit(config, client, backend, repo=repo, user_goal=goal,
-                                    workspace_root=root, references=references, input_seeds=seeds,
-                                    cancellation=cancellation)
-        click.echo(json.dumps(result, ensure_ascii=False))
+        if project_id is None:
+            result = create_local_audit(config, client, backend, repo=repo, user_goal=goal,
+                                        workspace_root=root, references=references, input_seeds=seeds,
+                                        cancellation=cancellation)
+            click.echo(json.dumps(result, ensure_ascii=False))
+            if once:
+                return
+            project_id = result["project_id"]
+        monitored = monitor_audit(config, client, backend, project_id, once=once, retry_review=retry_review,
+                                  cancellation=cancellation, report=lambda event: click.echo(json.dumps(event, ensure_ascii=False)))
+        if monitored["status"] == "cancelled":
+            raise click.Abort()
     except (OSError, ValueError, RuntimeError, requests.RequestException) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
+        cancellation.cancel("controller shutdown")
         if previous is not None:
             signal.signal(signal.SIGTERM, previous)
         if backend is not None:

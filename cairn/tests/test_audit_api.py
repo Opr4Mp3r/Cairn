@@ -232,7 +232,10 @@ def test_revisions_and_research_fact_metadata_without_controller_or_model(client
     assert client.get(f"/projects/{pid}/audit").json()["reason_revision"] == 2
     client.post(f"/projects/{pid}/hints", json={"content": "new clue", "creator": "human"})
     assert client.get(f"/projects/{pid}/audit").json()["reason_revision"] == 3
-    assert client.post(f"/projects/{pid}/complete", json={"from": ["f001"], "description": "done", "worker": "worker"}).status_code == 409
+    completion = client.post(f"/projects/{pid}/complete", json={"from": ["f001"], "description": "done", "worker": "worker"})
+    assert completion.status_code == 202
+    assert completion.json()["status"] == "pending"
+    assert not any(intent["to"] == "goal" for intent in client.get(f"/projects/{pid}").json()["intents"])
     assert client.get(f"/projects/{pid}").json()["project"]["status"] == "active"
 
 

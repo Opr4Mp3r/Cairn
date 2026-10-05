@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from cairn.server.db import get_conn
 from cairn.server.models import (
     CompleteRequest,
+    AuditCompletion,
     CreateProjectRequest,
     Fact,
     Hint,
@@ -23,6 +24,7 @@ from cairn.server.services import (
     fact_to_model,
     check_project_completed,
     check_project_active,
+    check_new_research_allowed,
     clear_project_reason,
     expire_reason_leases,
     expire_workers,
@@ -190,6 +192,8 @@ def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
 @router.post("/projects/{project_id}/reason/claim", response_model=ProjectMeta)
 def claim_project_reason(project_id: str, body: ReasonClaimRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
@@ -198,6 +202,7 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
             raise HTTPException(409, f"Project reason is currently claimed by {current_worker}")
         if current_worker == body.worker:
             return project_meta_from_row(row, conn)
+        check_new_research_allowed(conn, project_id)
 
         now = utcnow()
         conn.execute(
@@ -253,11 +258,16 @@ def release_project_reason(project_id: str, body: HeartbeatRequest):
         return project_meta_from_row(updated, conn)
 
 
-@router.post("/projects/{project_id}/complete", response_model=Intent)
-def complete_project(project_id: str, body: CompleteRequest):
+@router.post("/projects/{project_id}/complete", response_model=Intent | AuditCompletion)
+def complete_project(project_id: str, body: CompleteRequest, response: Response):
     with get_conn() as conn:
         if get_project_or_404(conn, project_id)["mode"] == "audit":
-            raise HTTPException(409, "Audit completion requires the completion-review protocol, which is not implemented yet")
+            from cairn.server.audit_review import create_completion
+
+            conn.execute("BEGIN IMMEDIATE")
+            request = create_completion(conn, audit_metadata(conn, project_id), body)
+            response.status_code = 202
+            return request
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         validate_facts_exist(conn, project_id, body.from_)
@@ -304,6 +314,8 @@ def complete_project(project_id: str, body: CompleteRequest):
 @router.post("/projects/{project_id}/reopen", response_model=ReopenResponse)
 def reopen_project(project_id: str, body: ReopenRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            raise HTTPException(409, "Completed audit reruns require a new fixed-baseline audit; generic reopen does not reset independent approval")
         expire_reason_leases(conn, project_id)
         check_project_completed(conn, project_id)
         completion = get_completion_intent_or_409(conn, project_id)
