@@ -2,7 +2,76 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_serializer, model_validator
+
+
+class AuditBudget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    research_seconds: int = Field(gt=0, default=1800)
+    drain_seconds: int = Field(gt=0, default=120)
+    final_review_seconds: int = Field(gt=0, default=360)
+
+
+class EvidenceReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    start_line: int | None = Field(default=None, gt=0)
+    end_line: int | None = Field(default=None, gt=0)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        if not value.strip() or "\x00" in value:
+            raise ValueError("evidence path must be non-empty and contain no NUL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_lines(self) -> "EvidenceReference":
+        if self.end_line is not None and (self.start_line is None or self.end_line < self.start_line):
+            raise ValueError("end_line requires start_line and must not precede it")
+        return self
+
+
+class AuditFactData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence: list[EvidenceReference] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list)
+    premise_ids: list[str] = Field(default_factory=list)
+    review_status: Literal["unverified", "verified", "refuted"] = "unverified"
+    validation_level: str | None = None
+    review_notes: str | None = None
+
+    @field_validator("premise_ids", "conditions")
+    @classmethod
+    def validate_items(cls, value: list[str]) -> list[str]:
+        items = [item.strip() for item in value]
+        if any(not item for item in items) or len(items) != len(set(items)):
+            raise ValueError("items must be non-empty and unique")
+        return items
+
+
+class AuditMetadata(BaseModel):
+    project_id: str
+    repo_path: str
+    workspace_root: str
+    workspace_path: str | None = None
+    baseline: dict[str, JsonValue]
+    user_goal: str
+    policy: dict[str, JsonValue]
+    policy_digest: str
+    budget: AuditBudget
+    seed_ids: dict[str, str]
+    phase: Literal["preparing", "researching"] = "preparing"
+    audit_revision: int = 1
+    reason_revision: int = 1
+    started_at: str | None = None
+    research_deadline: str | None = None
+    drain_deadline: str | None = None
+    final_deadline: str | None = None
 
 
 class Settings(BaseModel):
@@ -13,6 +82,14 @@ class Settings(BaseModel):
 class Fact(BaseModel):
     id: str
     description: str
+    audit: AuditFactData | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.audit is None:
+            data.pop("audit", None)
+        return data
 
 
 class Intent(BaseModel):
@@ -50,6 +127,16 @@ class ProjectMeta(BaseModel):
     bootstrap_enabled: bool
     created_at: str
     reason: ProjectReason | None = None
+    mode: Literal["generic", "audit"] = "generic"
+    audit: AuditMetadata | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.mode == "generic":
+            data.pop("mode", None)
+            data.pop("audit", None)
+        return data
 
 
 class ProjectSummary(ProjectMeta):
@@ -167,6 +254,7 @@ class ReasonClaimRequest(BaseModel):
 class ConcludeRequest(BaseModel):
     worker: str
     description: str
+    audit: AuditFactData | None = None
 
     @field_validator("worker", "description")
     @classmethod
@@ -242,3 +330,105 @@ class ReopenResponse(BaseModel):
     project: ProjectMeta
     fact: Fact
     intent: Intent
+
+
+class AuditSeed(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    audit: AuditFactData = Field(default_factory=AuditFactData)
+
+    @field_validator("key", "description")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+
+class AuditInitialIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    from_: list[str] = Field(alias="from", min_length=1)
+    description: str = Field(min_length=1)
+
+    @field_validator("from_")
+    @classmethod
+    def validate_sources(cls, value: list[str]) -> list[str]:
+        return AuditFactData.validate_items(value)
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value.strip()
+
+
+class CreateAuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    origin: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+    user_goal: str = Field(min_length=1)
+    creator: str = Field(min_length=1, default="audit-controller")
+    repo_path: str = Field(min_length=1)
+    workspace_root: str = Field(min_length=1)
+    baseline: dict[str, JsonValue] = Field(min_length=1)
+    policy: dict[str, JsonValue] = Field(min_length=1)
+    budget: AuditBudget = Field(default_factory=AuditBudget)
+    seeds: list[AuditSeed] = Field(default_factory=list)
+    intents: list[AuditInitialIntent] = Field(default_factory=list)
+    hints: list[CreateHintInline] = Field(default_factory=list)
+
+    @field_validator("title", "origin", "goal", "user_goal", "creator")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value.strip()
+
+
+class AuditRecordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_key: str = Field(min_length=1)
+    object_type: Literal["project", "fact", "intent"]
+    object_id: str = Field(min_length=1)
+    input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    phase: str = Field(min_length=1)
+    session: str | None = None
+    attempt_status: Literal["success", "error"]
+    decision: Literal["approved", "rejected", "needs_evidence"] | None = None
+    error: str | None = None
+    result: dict[str, JsonValue] | None = None
+    artifacts: list[str] = Field(default_factory=list)
+    usage: dict[str, JsonValue] | None = None
+
+    @field_validator("record_key", "object_id", "phase")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_attempt(self) -> "AuditRecordRequest":
+        if self.attempt_status == "error":
+            if not self.error or not self.error.strip() or self.decision is not None:
+                raise ValueError("an error attempt requires an error and cannot contain a decision")
+        elif self.error is not None:
+            raise ValueError("a successful attempt cannot contain an error")
+        return self
+
+
+class AuditRecord(AuditRecordRequest):
+    id: str
+    created_at: str
+
+
+class AuditDetail(AuditMetadata):
+    records: list[AuditRecord] = Field(default_factory=list)

@@ -19,6 +19,8 @@ from cairn.server.models import (
 )
 from cairn.server.services import (
     build_intents,
+    audit_metadata,
+    fact_to_model,
     check_project_completed,
     check_project_active,
     clear_project_reason,
@@ -32,7 +34,6 @@ from cairn.server.services import (
     next_intent_id,
     next_project_id,
     project_meta_from_row,
-    project_reason_from_row,
     utcnow,
     validate_facts_exist,
     validate_goal_not_in_sources,
@@ -58,12 +59,7 @@ def list_projects():
         """).fetchall()
         return [
             ProjectSummary(
-                id=row["id"],
-                title=row["title"],
-                status=row["status"],
-                bootstrap_enabled=bool(row["bootstrap_enabled"]),
-                created_at=row["created_at"],
-                reason=project_reason_from_row(row),
+                **project_meta_from_row(row, conn).model_dump(),
                 fact_count=row["fact_count"],
                 intent_count=row["intent_count"],
                 working_intent_count=row["working_intent_count"],
@@ -137,8 +133,8 @@ def get_project(project_id: str):
         ).fetchall()
 
         return ProjectDetail(
-            project=project_meta_from_row(row),
-            facts=[Fact(**dict(f)) for f in facts],
+            project=project_meta_from_row(row, conn),
+            facts=[fact_to_model(conn, f, project_id, is_audit=row["mode"] == "audit") for f in facts],
             intents=build_intents(conn, project_id),
             hints=[Hint(**dict(h)) for h in hints],
         )
@@ -160,7 +156,7 @@ def update_project_title(project_id: str, body: UpdateProjectTitleRequest):
             (body.title, project_id),
         )
         updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return project_meta_from_row(updated)
+        return project_meta_from_row(updated, conn)
 
 
 @router.put("/projects/{project_id}/status", response_model=ProjectMeta)
@@ -169,10 +165,13 @@ def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
         current_status = row["status"]
+        metadata = audit_metadata(conn, project_id)
+        if metadata is not None and metadata.phase == "preparing" and body.status == "active":
+            raise HTTPException(409, "Preparing audit must be activated through audit/start")
         if current_status == "completed":
             raise HTTPException(409, "Completed projects cannot change status")
         if current_status == body.status:
-            return project_meta_from_row(row)
+            return project_meta_from_row(row, conn)
 
         conn.execute(
             "UPDATE projects SET status = ? WHERE id = ?",
@@ -185,7 +184,7 @@ def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
             )
             clear_project_reason(conn, project_id)
         updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return project_meta_from_row(updated)
+        return project_meta_from_row(updated, conn)
 
 
 @router.post("/projects/{project_id}/reason/claim", response_model=ProjectMeta)
@@ -198,7 +197,7 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
         if current_worker is not None and current_worker != body.worker:
             raise HTTPException(409, f"Project reason is currently claimed by {current_worker}")
         if current_worker == body.worker:
-            return project_meta_from_row(row)
+            return project_meta_from_row(row, conn)
 
         now = utcnow()
         conn.execute(
@@ -213,7 +212,7 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
             (body.worker, body.trigger, now, now, project_id),
         )
         updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return project_meta_from_row(updated)
+        return project_meta_from_row(updated, conn)
 
 
 @router.post("/projects/{project_id}/reason/heartbeat", response_model=ProjectMeta)
@@ -234,7 +233,7 @@ def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
             (now, project_id),
         )
         updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return project_meta_from_row(updated)
+        return project_meta_from_row(updated, conn)
 
 
 @router.post("/projects/{project_id}/reason/release", response_model=ProjectMeta)
@@ -245,18 +244,20 @@ def release_project_reason(project_id: str, body: HeartbeatRequest):
         row = get_project_or_404(conn, project_id)
         current_worker = row["reason_worker"]
         if current_worker is None:
-            return project_meta_from_row(row)
+            return project_meta_from_row(row, conn)
         if current_worker != body.worker:
             raise HTTPException(409, f"Project reason is currently claimed by {current_worker}")
 
         clear_project_reason(conn, project_id)
         updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return project_meta_from_row(updated)
+        return project_meta_from_row(updated, conn)
 
 
 @router.post("/projects/{project_id}/complete", response_model=Intent)
 def complete_project(project_id: str, body: CompleteRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            raise HTTPException(409, "Audit completion requires the completion-review protocol, which is not implemented yet")
         check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         validate_facts_exist(conn, project_id, body.from_)
@@ -352,7 +353,7 @@ def reopen_project(project_id: str, body: ReopenRequest):
         assert updated_project is not None
         assert updated_intent is not None
         return ReopenResponse(
-            project=project_meta_from_row(updated_project),
+            project=project_meta_from_row(updated_project, conn),
             fact=Fact(id=fact_id, description=description),
             intent=intent_to_model(conn, updated_intent, project_id),
         )

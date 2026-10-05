@@ -79,6 +79,32 @@ CREATE TABLE IF NOT EXISTS scoped_counters (
     value INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project_id, kind)
 );
+
+CREATE TABLE IF NOT EXISTS audits (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    metadata_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_facts (
+    project_id TEXT NOT NULL,
+    fact_id TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    PRIMARY KEY (project_id, fact_id),
+    FOREIGN KEY (fact_id, project_id) REFERENCES facts(id, project_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS audit_records (
+    id TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES audits(project_id) ON DELETE CASCADE,
+    record_key TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    input_digest TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    PRIMARY KEY (project_id, id),
+    UNIQUE (project_id, record_key)
+);
 """
 
 
@@ -95,6 +121,8 @@ def configure(path: Path) -> None:
 
 def _ensure_project_columns(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+    if "mode" not in columns:
+        conn.execute("ALTER TABLE projects ADD COLUMN mode TEXT NOT NULL DEFAULT 'generic'")
     if "bootstrap_enabled" not in columns:
         conn.execute("ALTER TABLE projects ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1")
         if "bootstrap_mode" in columns:

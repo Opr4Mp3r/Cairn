@@ -1,11 +1,51 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from cairn.server.models import Intent, ProjectMeta, ProjectReason
+from cairn.server.models import AuditFactData, AuditMetadata, Fact, Intent, ProjectMeta, ProjectReason
+
+
+def json_text(value) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "Metadata must contain finite JSON values") from exc
+
+
+def audit_metadata(conn: sqlite3.Connection, project_id: str) -> AuditMetadata | None:
+    row = conn.execute("SELECT metadata_json FROM audits WHERE project_id = ?", (project_id,)).fetchone()
+    return AuditMetadata.model_validate_json(row["metadata_json"]) if row is not None else None
+
+
+def save_audit_metadata(conn: sqlite3.Connection, metadata: AuditMetadata) -> None:
+    conn.execute(
+        "UPDATE audits SET metadata_json = ? WHERE project_id = ?",
+        (json_text(metadata.model_dump(mode="json")), metadata.project_id),
+    )
+
+
+def bump_audit_revision(conn: sqlite3.Connection, project_id: str, *, reason: bool) -> None:
+    metadata = audit_metadata(conn, project_id)
+    if metadata is not None:
+        metadata.audit_revision += 1
+        if reason:
+            metadata.reason_revision += 1
+        save_audit_metadata(conn, metadata)
+
+
+def fact_to_model(conn: sqlite3.Connection, row: sqlite3.Row, project_id: str, *, is_audit: bool = True) -> Fact:
+    audit_row = conn.execute(
+        "SELECT metadata_json FROM audit_facts WHERE project_id = ? AND fact_id = ?",
+        (project_id, row["id"]),
+    ).fetchone() if is_audit else None
+    return Fact(
+        id=row["id"], description=row["description"],
+        audit=AuditFactData.model_validate_json(audit_row["metadata_json"]) if audit_row is not None else None,
+    )
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -46,6 +86,10 @@ def next_intent_id(conn: sqlite3.Connection, project_id: str) -> str:
 
 def next_hint_id(conn: sqlite3.Connection, project_id: str) -> str:
     return _next_scoped_id(conn, "hint", "h", project_id)
+
+
+def next_review_id(conn: sqlite3.Connection, project_id: str) -> str:
+    return _next_scoped_id(conn, "review", "r", project_id)
 
 
 def get_project_or_404(conn: sqlite3.Connection, project_id: str) -> sqlite3.Row:
@@ -194,7 +238,7 @@ def project_reason_from_row(row: sqlite3.Row) -> ProjectReason | None:
     )
 
 
-def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
+def project_meta_from_row(row: sqlite3.Row, conn: sqlite3.Connection) -> ProjectMeta:
     return ProjectMeta(
         id=row["id"],
         title=row["title"],
@@ -202,6 +246,8 @@ def project_meta_from_row(row: sqlite3.Row) -> ProjectMeta:
         bootstrap_enabled=bool(row["bootstrap_enabled"]),
         created_at=row["created_at"],
         reason=project_reason_from_row(row),
+        mode=row["mode"],
+        audit=audit_metadata(conn, row["id"]) if row["mode"] == "audit" else None,
     )
 
 

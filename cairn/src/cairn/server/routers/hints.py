@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from cairn.server.db import get_conn
 from cairn.server.models import CreateHintRequest, Hint
-from cairn.server.services import check_project_hint_writable, next_hint_id, utcnow
+from cairn.server.services import bump_audit_revision, check_project_hint_writable, next_hint_id, utcnow
 
 router = APIRouter(tags=["hints"])
 
@@ -22,4 +22,5 @@ def create_hint(project_id: str, body: CreateHintRequest):
             "INSERT INTO hints (id, project_id, content, creator, created_at) VALUES (?, ?, ?, ?, ?)",
             (hid, project_id, body.content, body.creator, now),
         )
+        bump_audit_revision(conn, project_id, reason=True)
         return Hint(id=hid, content=body.content, creator=body.creator, created_at=now)

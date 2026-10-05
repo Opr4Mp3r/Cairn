@@ -4,7 +4,7 @@ from datetime import datetime
 import yaml
 
 from cairn.server.db import get_conn
-from cairn.server.services import expire_reason_leases, expire_workers, get_project_or_404
+from cairn.server.services import audit_metadata, fact_to_model, expire_reason_leases, expire_workers, get_project_or_404
 
 router = APIRouter(tags=["export"])
 
@@ -28,7 +28,7 @@ def _load_project_data(conn, project_id: str):
         "SELECT id, description FROM facts WHERE project_id = ?", (project_id,)
     ).fetchall()
     hints = conn.execute(
-        "SELECT content, creator, created_at FROM hints WHERE project_id = ? ORDER BY created_at",
+        "SELECT id, content, creator, created_at FROM hints WHERE project_id = ? ORDER BY created_at",
         (project_id,),
     ).fetchall()
     intents = conn.execute(
@@ -66,6 +66,9 @@ def _export_yaml(conn, project_id: str) -> str:
             "bootstrap_enabled": bool(proj["bootstrap_enabled"]),
         }
     }
+    if proj["mode"] == "audit":
+        data["project"]["mode"] = "audit"
+        data["project"]["audit"] = audit_metadata(conn, project_id).model_dump(mode="json")
 
     if hints:
         data["hints"] = [
@@ -77,7 +80,14 @@ def _export_yaml(conn, project_id: str) -> str:
             for h in hints
         ]
 
-    data["facts"] = [{"id": f["id"], "description": f["description"]} for f in facts]
+    data["facts"] = (
+        [fact_to_model(conn, f, project_id).model_dump(mode="json") for f in facts]
+        if proj["mode"] == "audit"
+        else [{"id": f["id"], "description": f["description"]} for f in facts]
+    )
+    if proj["mode"] == "audit" and hints:
+        for entry, hint in zip(data["hints"], hints):
+            entry["id"] = hint["id"]
 
     intent_list = []
     for i in intents:
@@ -90,6 +100,8 @@ def _export_yaml(conn, project_id: str) -> str:
             "created_at": format_export_timestamp(i["created_at"]),
             "concluded_at": format_export_timestamp(i["concluded_at"]),
         }
+        if proj["mode"] == "audit":
+            entry["id"] = i["id"]
         intent_list.append(entry)
 
     if intent_list:

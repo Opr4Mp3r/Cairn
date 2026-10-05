@@ -1,21 +1,24 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from cairn.server.db import get_conn
 from cairn.server.models import (
+    AuditFactData,
     ConcludeRequest,
     ConcludeResponse,
     CreateIntentRequest,
-    Fact,
     HeartbeatRequest,
     Intent,
 )
 from cairn.server.services import (
     check_project_active,
+    bump_audit_revision,
+    fact_to_model,
     get_claimable_open_intent_or_404,
     get_releasable_open_intent_or_404,
     intent_to_model,
     next_fact_id,
     next_intent_id,
+    json_text,
     utcnow,
     validate_facts_exist,
     validate_intent_creator_worker,
@@ -57,6 +60,7 @@ def create_intent(project_id: str, body: CreateIntentRequest):
                 "INSERT INTO intent_sources (intent_id, project_id, fact_id) VALUES (?, ?, ?)",
                 (iid, project_id, fid),
             )
+        bump_audit_revision(conn, project_id, reason=False)
 
         return Intent(
             id=iid,
@@ -121,27 +125,39 @@ def release(project_id: str, intent_id: str, body: HeartbeatRequest):
 )
 def conclude(project_id: str, intent_id: str, body: ConcludeRequest):
     with get_conn() as conn:
-        check_project_active(conn, project_id)
+        project = check_project_active(conn, project_id)
         get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
 
         now = utcnow()
         fid = next_fact_id(conn, project_id)
 
+        audit = None
+        if project["mode"] == "audit":
+            audit = body.audit or AuditFactData()
+            if audit.review_status != "unverified":
+                raise HTTPException(400, "Research facts must start unverified")
+            validate_facts_exist(conn, project_id, audit.premise_ids)
+            validate_goal_not_in_sources(audit.premise_ids)
+
         conn.execute(
             "INSERT INTO facts (id, project_id, description) VALUES (?, ?, ?)",
             (fid, project_id, body.description),
         )
+        if audit is not None:
+            conn.execute("INSERT INTO audit_facts VALUES (?, ?, ?)", (project_id, fid, json_text(audit.model_dump(mode="json"))))
         conn.execute(
             "UPDATE intents SET to_fact_id = ?, worker = ?, last_heartbeat_at = ?, concluded_at = ? WHERE id = ? AND project_id = ?",
             (fid, body.worker, now, now, intent_id, project_id),
         )
+        bump_audit_revision(conn, project_id, reason=True)
 
         updated = conn.execute(
             "SELECT * FROM intents WHERE id = ? AND project_id = ?",
             (intent_id, project_id),
         ).fetchone()
 
+        fact = conn.execute("SELECT * FROM facts WHERE project_id = ? AND id = ?", (project_id, fid)).fetchone()
         return ConcludeResponse(
-            fact=Fact(id=fid, description=body.description),
+            fact=fact_to_model(conn, fact, project_id, is_audit=project["mode"] == "audit"),
             intent=intent_to_model(conn, updated, project_id),
         )

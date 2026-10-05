@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 import requests
 from requests.adapters import HTTPAdapter
 
-from cairn.server.models import Intent, ProjectDetail, ProjectSummary, Settings
+from cairn.server.models import AuditDetail, AuditRecordRequest, CreateAuditRequest, Intent, ProjectDetail, ProjectSummary, Settings
 
 LOG = logging.getLogger(__name__)
 
@@ -62,6 +62,20 @@ class CairnClient:
         response = self._session().get(self._url("/settings"), timeout=self._timeout)
         response.raise_for_status()
         return Settings.model_validate(response.json())
+
+    def create_audit(self, request: CreateAuditRequest) -> ApiResult:
+        return self._request_json("POST", "/audits", request.model_dump(mode="json", by_alias=True))
+
+    def start_audit(self, project_id: str) -> ApiResult:
+        return self._request_json("POST", f"/projects/{project_id}/audit/start", {})
+
+    def get_audit(self, project_id: str) -> AuditDetail:
+        response = self._session().get(self._url(f"/projects/{project_id}/audit"), timeout=self._timeout)
+        response.raise_for_status()
+        return AuditDetail.model_validate(response.json())
+
+    def record_audit_review(self, project_id: str, request: AuditRecordRequest) -> ApiResult:
+        return self._request_json("POST", f"/projects/{project_id}/audit/reviews", request.model_dump(mode="json"))
 
     def export_project(self, project_id: str) -> str:
         response = self._session().get(
