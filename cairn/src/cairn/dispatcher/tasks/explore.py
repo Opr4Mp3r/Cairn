@@ -22,6 +22,7 @@ from cairn.dispatcher.tasks.common import (
     write_graph_snapshot_reference,
 )
 from cairn.dispatcher.workers.registry import get_driver
+from cairn.dispatcher.tasks.audit import explore_result, research_payload, research_prompt, research_receipt, research_workspace
 from cairn.server.models import Intent, ProjectDetail
 
 LOG = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def run_explore_task(
     lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
     lease.start()
     try:
-        container_name = container_manager.ensure_running(project.project.id)
+        container_name = research_workspace(config, client, container_manager, project)
 
         if task_healthcheck_enabled(config):
             LOG.info(
@@ -86,8 +87,8 @@ def run_explore_task(
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "unhealthy"
 
-        prompt = render_prompt(
-            load_prompt(config.runtime.prompt_group, "explore.md"),
+        prompt = research_prompt(
+            config, project, "explore.md",
             {
                 "graph_yaml": write_graph_snapshot_reference(
                     container_manager,
@@ -116,6 +117,7 @@ def run_explore_task(
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
+        research_receipt(container_manager, container_name, project, worker, phase="explore_execute", session=session, prompt=prompt, process=first)
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -142,8 +144,8 @@ def run_explore_task(
         if not did_timeout(first) and first.returncode == 0:
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
-                payload = parse_json_output(model_output)
-                kind, description = validate_explore_payload(payload)
+                payload = research_payload(project, model_output)
+                kind, description, audit = explore_result(project, payload)
             except Exception as exc:
                 LOG.warning(
                     "explore parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -163,7 +165,7 @@ def run_explore_task(
                     container_name,
                     worker,
                     driver,
-                    project.project.id,
+                    project,
                     intent,
                     export_yaml,
                     session,
@@ -191,6 +193,7 @@ def run_explore_task(
                 source="explore_execute",
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
+                audit=audit,
             )
         if did_timeout(first):
             LOG.warning(
@@ -210,7 +213,7 @@ def run_explore_task(
                 container_name,
                 worker,
                 driver,
-                project.project.id,
+                project,
                 intent,
                 export_yaml,
                 session,
@@ -245,13 +248,14 @@ def _try_conclude_fallback(
     container_name: str,
     worker: WorkerConfig,
     driver,
-    project_id: str,
+    project: ProjectDetail,
     intent: Intent,
     export_yaml: str,
     session: str | None,
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
 ) -> str:
+    project_id = project.project.id
     if not driver.supports_conclude() or not session:
         LOG.info(
             "conclude fallback unavailable project=%s intent=%s worker=%s supports_conclude=%s has_session=%s",
@@ -287,10 +291,10 @@ def _try_conclude_fallback(
         best_effort_release(client, project_id, intent.id, worker.name)
         return "failed"
 
-    container_name = container_manager.ensure_running(project_id)
+    container_name = research_workspace(config, client, container_manager, project)
 
-    prompt = render_prompt(
-        load_prompt(config.runtime.prompt_group, "explore_conclude.md"),
+    prompt = research_prompt(
+        config, project, "explore_conclude.md",
         {
             "graph_yaml": write_graph_snapshot_reference(
                 container_manager,
@@ -316,6 +320,7 @@ def _try_conclude_fallback(
         cancellation=cancellation,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
+    research_receipt(container_manager, container_name, project, worker, phase="explore_conclude", session=session, prompt=prompt, process=result)
     cancelled = cancel_reason(result, cancellation)
     if cancelled is not None:
         LOG.info(
@@ -347,8 +352,8 @@ def _try_conclude_fallback(
         return "failed"
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
-        payload = parse_json_output(model_output)
-        kind, description = validate_explore_payload(payload)
+        payload = research_payload(project, model_output)
+        kind, description, audit = explore_result(project, payload)
     except Exception as exc:
         LOG.warning(
             "conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -381,6 +386,7 @@ def _try_conclude_fallback(
         description,
         source="explore_conclude",
         phase_ms=conclude_ms,
+        audit=audit,
     )
 
 

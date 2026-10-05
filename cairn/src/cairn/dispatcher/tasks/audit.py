@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from pathlib import Path
+import subprocess
+import uuid
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from cairn.dispatcher.config import DispatchConfig
+from cairn.audit_evidence import repository_baseline, source_evidence
+from cairn.dispatcher.contracts import parse_json_output, validate_explore_payload, validate_reason_payload
+from cairn.dispatcher.output_parser import FENCED_BLOCK_RE
+from cairn.dispatcher.prompting import load_prompt, render_prompt
+from cairn.server.models import AuditFactData, AuditInitialIntent, CompleteRequest, ProjectDetail
+
+
+def research_payload(project: ProjectDetail, text: str) -> dict:
+    if project.project.mode != "audit":
+        return parse_json_output(text)
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate answer field: {key}")
+            result[key] = value
+        return result
+
+    segment = text.strip()
+    fenced = FENCED_BLOCK_RE.fullmatch(segment)
+    if fenced is not None:
+        segment = fenced.group(1).strip()
+    for suffix in ("", "}"):
+        try:
+            payload = json.loads(segment + suffix, object_pairs_hook=unique_object)
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("accepted"), bool):
+            return payload
+    raise ValueError("audit output requires a complete top-level accepted wrapper")
+
+
+def research_receipt(backend, workspace: str, project: ProjectDetail, worker, *, phase: str, session, prompt: str, process) -> None:
+    if project.project.mode != "audit":
+        return
+    path = str(Path(workspace) / "research" / f"{phase}-{uuid.uuid4().hex}.json")
+    backend.write_text_file(workspace, path, json.dumps({
+        "project_id": project.project.id, "worker": worker.name, "phase": phase,
+        "session": session, "prompt": prompt, "process": asdict(process),
+        "note": "Raw execution receipt; exit code alone does not validate an audit claim.",
+    }, ensure_ascii=False, indent=2))
+
+
+def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, replacements: dict[str, str]) -> str:
+    if project.project.mode != "audit":
+        return render_prompt(load_prompt(config.runtime.prompt_group, name), replacements)
+    if config.controller is None or not config.controller.research_prompt_group or project.project.audit is None:
+        raise ValueError("audit research requires configured prompt group and metadata")
+    metadata = project.project.audit
+    supported = supported_fact_ids(project)
+    context = {
+        "repo_path": metadata.repo_path, "policy": metadata.policy,
+        "baseline": {key: metadata.baseline.get(key) for key in ("git_commit", "digest")},
+        "verified_fact_ids": supported,
+        "unverified_or_refuted": [fact.id for fact in project.facts if fact.id not in {"origin", "goal", *supported}],
+    }
+    return render_prompt(load_prompt(config.controller.research_prompt_group, name),
+                         {**replacements, "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
+
+
+def supported_fact_ids(project: ProjectDetail) -> list[str]:
+    supported = {"origin"}
+    remaining = [fact for fact in project.facts if fact.id not in ("origin", "goal") and fact.audit and fact.audit.review_status == "verified"]
+    for _ in remaining:
+        added = {fact.id for fact in remaining if set(fact.audit.premise_ids) <= supported}
+        if added <= supported:
+            break
+        supported.update(added)
+    return [fact.id for fact in project.facts if fact.id in supported and fact.id != "origin"]
+
+
+def research_workspace(config: DispatchConfig, client, backend, project: ProjectDetail) -> str:
+    if project.project.mode != "audit":
+        return backend.ensure_running(project.project.id)
+    try:
+        metadata = project.project.audit
+        if config.runtime.execution != "local" or metadata is None or metadata.workspace_path is None:
+            raise ValueError("audit project requires its activated local workspace")
+        workspace, repo = Path(metadata.workspace_path), Path(metadata.repo_path)
+        context = json.loads((workspace / "input.json").read_text(encoding="utf-8"))
+        if not isinstance(context, dict) or not workspace.is_dir() or (workspace / "repo").resolve(strict=True) != repo or any(
+            context.get(key) != value for key, value in {"project_id": project.project.id, "repo_path": str(repo), "policy_digest": metadata.policy_digest}.items()
+        ):
+            raise ValueError("audit workspace does not match the activated project")
+        files = metadata.baseline.get("files")
+        if not isinstance(files, dict) or not files:
+            raise ValueError("baseline source fingerprints are missing")
+        if repository_baseline(repo, Path(metadata.workspace_root))["files"] != files:
+            raise ValueError("baseline_changed before research")
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        try:
+            response = client.set_project_status(project.project.id, "stopped")
+            if not response.ok:
+                raise ValueError(f"{response.status_code}: {response.text}")
+        except Exception as stop_error:
+            raise RuntimeError(f"project {project.project.id}: baseline check failed ({exc}); stop failed: {stop_error}; state uncertain") from stop_error
+        raise ValueError(f"project {project.project.id} stopped: baseline check failed: {exc}") from exc
+    return str(workspace)
+
+
+class ExploreFact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+    audit: AuditFactData
+
+
+def explore_result(project: ProjectDetail, payload: dict) -> tuple[str, str | None, AuditFactData | None]:
+    if project.project.mode != "audit":
+        kind, description = validate_explore_payload(payload)
+        return kind, description, None
+    if payload.get("accepted") is False:
+        return "rejected", None, None
+    if payload.get("accepted") is not True:
+        raise ValueError("audit output requires accepted wrapper")
+    fact = ExploreFact.model_validate(payload.get("data"), strict=True)
+    if not fact.description.strip() or fact.audit.review_status != "unverified":
+        raise ValueError("research observations must be non-empty and unverified")
+    known = {item.id for item in project.facts if item.id != "goal"}
+    if not set(fact.audit.premise_ids) <= known:
+        raise ValueError("unknown or goal premise in research observation")
+    metadata = project.project.audit
+    assert metadata is not None
+    repo = Path(metadata.repo_path)
+    fact.audit.evidence = source_evidence(repo, fact.audit.evidence)
+    for reference in fact.audit.evidence:
+        if "files" in metadata.baseline and metadata.baseline["files"].get(reference.path) != reference.sha256:
+            raise ValueError(f"baseline_changed or source not snapshotted: {reference.path}")
+    return "fact", fact.description.strip(), fact.audit
+
+
+def reason_result(project: ProjectDetail, payload: dict, *, open_intents_empty: bool, max_intents: int):
+    if project.project.mode == "audit" and payload.get("accepted") is not False:
+        if payload.get("accepted") is not True or not isinstance(payload.get("data"), dict) or set(payload["data"]) - {"intents", "intent", "complete"}:
+            raise ValueError("audit reason requires a strict action wrapper")
+    kind, data = validate_reason_payload(payload, open_intents_empty, max_intents)
+    if project.project.mode != "audit" or kind in ("noop", "rejected"):
+        return kind, data
+    if payload.get("accepted") is not True or set(payload["data"]) - {"intents", "intent", "complete"}:
+        raise ValueError("audit reason requires a strict action wrapper")
+    known = {fact.id for fact in project.facts if fact.id != "goal"}
+    if kind == "intents":
+        intents = [AuditInitialIntent.model_validate(item, strict=True) for item in data]
+        if any(not set(intent.from_) <= known for intent in intents):
+            raise ValueError("unknown or goal source in audit intent")
+        return kind, [intent.model_dump(by_alias=True) for intent in intents]
+    complete = CompleteRequest.model_validate({**data, "worker": "reason"}, strict=True)
+    if not set(complete.from_) <= set(supported_fact_ids(project)):
+        raise ValueError("audit completion cannot depend on unsupported facts")
+    return kind, {"from": complete.from_, "description": complete.description}
+
+
+def bootstrap_metadata(project: ProjectDetail, payload: dict) -> AuditFactData | None:
+    if project.project.mode != "audit" or payload.get("accepted") is False:
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict) or set(data) - {"fact", "complete"}:
+        raise ValueError("audit bootstrap requires fact metadata")
+    _kind, _description, audit = explore_result(project, {"accepted": True, "data": data.get("fact")})
+    return audit

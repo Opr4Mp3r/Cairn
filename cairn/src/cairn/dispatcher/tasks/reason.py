@@ -25,6 +25,7 @@ from cairn.dispatcher.tasks.common import (
     write_graph_snapshot_reference,
 )
 from cairn.dispatcher.workers.registry import get_driver
+from cairn.dispatcher.tasks.audit import research_payload, research_prompt, research_receipt, research_workspace, reason_result
 from cairn.server.models import ProjectDetail
 
 LOG = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def run_reason_task(
     lease = HeartbeatLease.for_reason(client, project.project.id, worker.name, config.runtime.interval)
     lease.start()
     try:
-        container_name = container_manager.ensure_running(project.project.id)
+        container_name = research_workspace(config, client, container_manager, project)
 
         if task_healthcheck_enabled(config):
             LOG.info(
@@ -100,8 +101,8 @@ def run_reason_task(
             len(project.hints),
             len(open_intents),
         )
-        prompt = render_prompt(
-            load_prompt(config.runtime.prompt_group, "reason.md"),
+        prompt = research_prompt(
+            config, project, "reason.md",
             {
                 "graph_yaml": write_graph_snapshot_reference(
                     container_manager,
@@ -131,6 +132,7 @@ def run_reason_task(
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         total_ms = int((time.perf_counter() - task_started) * 1000)
         session = driver.extract_session(session, result.stdout, result.stderr)
+        research_receipt(container_manager, container_name, project, worker, phase="reason_execute", session=session, prompt=prompt, process=result)
         cancelled = cancel_reason(result, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -175,9 +177,9 @@ def run_reason_task(
             return "failed"
         try:
             model_output = driver.extract_response_text(result.stdout, result.stderr)
-            payload = parse_json_output(model_output)
-            kind, data = validate_reason_payload(
-                payload, open_intents_empty=not open_intents, max_intents=config.tasks.reason.max_intents,
+            payload = research_payload(project, model_output)
+            kind, data = reason_result(
+                project, payload, open_intents_empty=not open_intents, max_intents=config.tasks.reason.max_intents,
             )
         except Exception as exc:
             LOG.warning(

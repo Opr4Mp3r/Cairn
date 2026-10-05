@@ -1,0 +1,36 @@
+server: "http://127.0.0.1:8000"
+runtime:
+  execution: local
+  worker_healthcheck: disabled
+  max_workers: 1
+  max_running_projects: 1
+  max_project_workers: 1
+  interval: 3
+  healthcheck_timeout: 15
+  prompt_group: default
+tasks:
+  bootstrap:
+    timeout: 120
+    conclude_timeout: 30
+  reason:
+    timeout: 60
+    max_intents: 2
+  explore:
+    timeout: 180
+    conclude_timeout: 30
+local:
+  workspace_root: "./datas/audit-workspaces"
+  completed_action: keep
+workers:
+  - name: claude-main
+    type: claudecode
+    task_types: [bootstrap, reason, explore]
+    max_running: 1
+    priority: 0
+controller:
+  research_prompt_group: audit
+  roles:
+    builder: claude-main
+    reviewer: claude-main
+  poll_interval: 3
+  max_goal_revisions: 2

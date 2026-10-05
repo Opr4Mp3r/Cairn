@@ -121,11 +121,17 @@ class CairnClient:
             json={"worker": worker},
         )
 
-    def conclude(self, project_id: str, intent_id: str, worker: str, description: str) -> ApiResult:
+    def set_project_status(self, project_id: str, status: str) -> ApiResult:
+        return self._request_json("PUT", f"/projects/{project_id}/status", {"status": status})
+
+    def conclude(self, project_id: str, intent_id: str, worker: str, description: str, audit=None) -> ApiResult:
+        payload = {"worker": worker, "description": description}
+        if audit is not None:
+            payload["audit"] = audit.model_dump(mode="json")
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents/{intent_id}/conclude",
-            json={"worker": worker, "description": description},
+            json=payload,
         )
 
     def complete(self, project_id: str, from_ids: list[str], description: str, worker: str) -> ApiResult:

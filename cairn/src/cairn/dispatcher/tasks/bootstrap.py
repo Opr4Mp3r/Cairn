@@ -26,6 +26,7 @@ from cairn.dispatcher.tasks.common import (
     write_conclude_result_with_fact_id,
 )
 from cairn.dispatcher.workers.registry import get_driver
+from cairn.dispatcher.tasks.audit import bootstrap_metadata, research_payload, research_prompt, research_receipt, research_workspace
 from cairn.server.models import Intent, ProjectDetail
 
 LOG = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ def run_bootstrap_task(
     lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
     lease.start()
     try:
-        container_name = container_manager.ensure_running(project.project.id)
+        container_name = research_workspace(config, client, container_manager, project)
 
         if task_healthcheck_enabled(config):
             LOG.info(
@@ -89,8 +90,8 @@ def run_bootstrap_task(
                 best_effort_release(client, project.project.id, intent.id, worker.name)
                 return "unhealthy"
 
-        prompt = render_prompt(
-            load_prompt(config.runtime.prompt_group, "bootstrap.md"),
+        prompt = research_prompt(
+            config, project, "bootstrap.md",
             _bootstrap_prompt_replacements(project),
         )
 
@@ -110,6 +111,7 @@ def run_bootstrap_task(
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
+        research_receipt(container_manager, container_name, project, worker, phase="bootstrap", session=session, prompt=prompt, process=first)
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -136,8 +138,9 @@ def run_bootstrap_task(
         if not did_timeout(first) and first.returncode == 0:
             try:
                 model_output = driver.extract_response_text(first.stdout, first.stderr)
-                payload = parse_json_output(model_output)
+                payload = research_payload(project, model_output)
                 kind, data = validate_bootstrap_execute_payload(payload)
+                audit = bootstrap_metadata(project, payload)
             except Exception as exc:
                 LOG.warning(
                     "bootstrap parse failed project=%s intent=%s worker=%s error=%s execute_ms=%s total_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -185,6 +188,7 @@ def run_bootstrap_task(
                 source="bootstrap",
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
+                audit=audit,
             )
         if did_timeout(first):
             LOG.warning(
@@ -284,10 +288,10 @@ def _try_conclude_fallback(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
 
-    container_name = container_manager.ensure_running(project.project.id)
+    container_name = research_workspace(config, client, container_manager, project)
 
-    prompt = render_prompt(
-        load_prompt(config.runtime.prompt_group, "bootstrap_conclude.md"),
+    prompt = research_prompt(
+        config, project, "bootstrap_conclude.md",
         _bootstrap_prompt_replacements(project),
     )
     conclude_argv = driver.build_conclude(worker, prompt, session)
@@ -304,6 +308,7 @@ def _try_conclude_fallback(
         cancellation=cancellation,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
+    research_receipt(container_manager, container_name, project, worker, phase="bootstrap_conclude", session=session, prompt=prompt, process=result)
     cancelled = cancel_reason(result, cancellation)
     if cancelled is not None:
         LOG.info(
@@ -335,7 +340,7 @@ def _try_conclude_fallback(
         return "failed"
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
-        payload = parse_json_output(model_output)
+        payload = research_payload(project, model_output)
         conclude_data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         if isinstance(conclude_data, dict) and isinstance(conclude_data.get("complete"), dict):
             LOG.warning(
@@ -346,6 +351,7 @@ def _try_conclude_fallback(
                 preview(str(conclude_data.get("complete"))),
             )
         kind, fact_description = validate_bootstrap_conclude_payload(payload)
+        audit = bootstrap_metadata(project, payload)
     except Exception as exc:
         LOG.warning(
             "bootstrap conclude parse failed project=%s intent=%s worker=%s error=%s conclude_ms=%s stdout_preview=%s stderr_preview=%s",
@@ -378,6 +384,7 @@ def _try_conclude_fallback(
         fact_description,
         source="bootstrap_conclude",
         phase_ms=conclude_ms,
+        audit=audit,
     )
 
 
@@ -410,6 +417,7 @@ def _write_bootstrap_complete_result(
     source: str,
     phase_ms: int,
     total_ms: int | None = None,
+    audit=None,
 ) -> str:
     conclude = write_conclude_result_with_fact_id(
         client,
@@ -420,6 +428,7 @@ def _write_bootstrap_complete_result(
         source=source,
         phase_ms=phase_ms,
         total_ms=total_ms,
+        audit=audit,
     )
     if conclude.status != "success":
         return "failed"

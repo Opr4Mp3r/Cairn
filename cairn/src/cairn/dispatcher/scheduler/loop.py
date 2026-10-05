@@ -421,6 +421,7 @@ class DispatcherLoop:
             fact_count=len(project.facts),
             hint_count=len(project.hints),
             open_intent_count=self._project_open_intent_count(project),
+            reason_revision=project.project.audit.reason_revision if project.project.audit else None,
         )
         self.runtime_project_ids.add(project.project.id)
         self._clear_project_log_state(project.project.id)
@@ -707,6 +708,8 @@ class DispatcherLoop:
         if checkpoint is None:
             return "initial"
         changes: list[str] = []
+        if project.project.audit is not None and project.project.audit.reason_revision > (checkpoint.reason_revision or 0):
+            changes.append(f"reason_revision:{checkpoint.reason_revision}->{project.project.audit.reason_revision}")
         if len(project.facts) > checkpoint.fact_count:
             changes.append(f"facts:{checkpoint.fact_count}->{len(project.facts)}")
         if len(project.hints) > checkpoint.hint_count:
@@ -770,6 +773,7 @@ class DispatcherLoop:
                         fact_count=task.fact_count,
                         hint_count=task.hint_count,
                         open_intent_count=task.open_intent_count,
+                        reason_revision=task.reason_revision,
                     )
                     LOG.debug(
                         "reason checkpoint updated project=%s facts=%s hints=%s open_intents=%s",
@@ -868,6 +872,7 @@ class DispatcherLoop:
                 fact_count=summary.fact_count,
                 hint_count=summary.hint_count,
                 open_intent_count=open_intent_count,
+                reason_revision=summary.audit.reason_revision if summary.audit else None,
             )
             LOG.debug(
                 "reason checkpoint initialized project=%s facts=%s hints=%s open_intents=%s",

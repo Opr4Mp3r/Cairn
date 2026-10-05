@@ -134,3 +134,48 @@ def audit_probe(config_path: Path, target_file: Path, role: str, output_dir: Pat
             raise click.ClickException(result.error or result.status)
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+@main.command("audit")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--repo", type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path), required=True)
+@click.option("--goal", required=True)
+@click.option("--reference", "references", type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=Path), multiple=True)
+@click.option("--seeds", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def audit(config_path: Path, repo: Path, goal: str, references: tuple[Path, ...], seeds: Path | None):
+    """构建、复核并激活本地审计项目；CP3 不运行后续 Overseer 或终审。"""
+    import requests
+
+    from cairn.controller.audit import create_local_audit
+    from cairn.dispatcher.config import DispatchConfig, LocalConfig
+    from cairn.dispatcher.protocol.client import CairnClient
+    from cairn.dispatcher.runtime.cancellation import TaskCancellation
+    from cairn.dispatcher.runtime.local_backend import LocalBackend
+
+    client = backend = None
+    previous = None
+    cancellation = TaskCancellation()
+    try:
+        config = DispatchConfig.load(config_path)
+        root = Path(config.local.workspace_root if config.local and config.local.workspace_root else "datas/audit-workspaces").expanduser()
+        root = root.resolve() if root.is_absolute() else (config_path.resolve().parent / root).resolve()
+        backend = LocalBackend(LocalConfig(workspace_root=str(root)))
+        client = CairnClient(config.server)
+
+        def terminate(_signum, _frame):
+            raise KeyboardInterrupt("controller received SIGTERM")
+
+        previous = signal.signal(signal.SIGTERM, terminate)
+        result = create_local_audit(config, client, backend, repo=repo, user_goal=goal,
+                                    workspace_root=root, references=references, input_seeds=seeds,
+                                    cancellation=cancellation)
+        click.echo(json.dumps(result, ensure_ascii=False))
+    except (OSError, ValueError, RuntimeError, requests.RequestException) as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+        if backend is not None:
+            backend.close()
+        if client is not None:
+            client.close()
