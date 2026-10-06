@@ -47,9 +47,10 @@ class HeartbeatLease:
         intent_id: str,
         worker_name: str,
         interval: int,
+        lease_id: str | None = None,
     ) -> "HeartbeatLease":
         return cls(
-            heartbeat=lambda: client.heartbeat(project_id, intent_id, worker_name),
+            heartbeat=lambda: client.heartbeat(project_id, intent_id, worker_name, lease_id=lease_id) if lease_id else client.heartbeat(project_id, intent_id, worker_name),
             scope=f"project={project_id} intent={intent_id}",
             worker_name=worker_name,
             interval=interval,
@@ -62,9 +63,10 @@ class HeartbeatLease:
         project_id: str,
         worker_name: str,
         interval: int,
+        lease_id: str | None = None,
     ) -> "HeartbeatLease":
         return cls(
-            heartbeat=lambda: client.reason_heartbeat(project_id, worker_name),
+            heartbeat=lambda: client.reason_heartbeat(project_id, worker_name, lease_id=lease_id) if lease_id else client.reason_heartbeat(project_id, worker_name),
             scope=f"project={project_id} reason",
             worker_name=worker_name,
             interval=interval,

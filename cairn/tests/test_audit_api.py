@@ -218,7 +218,9 @@ def test_revisions_and_research_fact_metadata_without_controller_or_model(client
     meta = client.get(f"/projects/{pid}/audit").json()
     assert (meta["audit_revision"], meta["reason_revision"]) == (2, 1)
     client.post(f"/projects/{pid}/intents/{intent['id']}/heartbeat", json={"worker": "worker"})
-    assert client.get(f"/projects/{pid}/audit").json() == meta
+    renewed = client.get(f"/projects/{pid}/audit").json()
+    assert renewed["leases"][f"intent:{intent['id']}"]["worker"] == "worker"
+    assert {key: value for key, value in renewed.items() if key != "leases"} == {key: value for key, value in meta.items() if key != "leases"}
     forged = client.post(f"/projects/{pid}/intents/{intent['id']}/conclude", json={"worker": "worker", "description": "claim", "audit": {"review_status": "verified"}})
     assert forged.status_code == 400
     response = client.post(f"/projects/{pid}/intents/{intent['id']}/conclude", json={

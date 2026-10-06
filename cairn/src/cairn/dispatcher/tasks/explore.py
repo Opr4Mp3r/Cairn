@@ -41,7 +41,7 @@ def run_explore_task(
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
     healthcheck_timeout = config.runtime.healthcheck_timeout
-    lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
+    lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval, intent.lease_id)
     lease.start()
     try:
         container_name = research_workspace(config, client, container_manager, project)
@@ -63,7 +63,7 @@ def run_explore_task(
                     worker.name,
                     cancellation.reason,
                 )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
+                best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
                 return "cancelled"
             if lease.failure is not None:
                 LOG.warning(
@@ -73,7 +73,7 @@ def run_explore_task(
                     worker.name,
                     lease.failure.status_code,
                 )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
+                best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
                 return "failed"
             if not health.ok:
                 LOG.warning(
@@ -84,7 +84,7 @@ def run_explore_task(
                     health.status,
                     health.detail,
                 )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
+                best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
                 return "unhealthy"
 
         prompt = research_prompt(
@@ -128,7 +128,7 @@ def run_explore_task(
                 cancelled,
                 execute_ms,
             )
-            best_effort_release(client, project.project.id, intent.id, worker.name)
+            best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
             return "cancelled"
         if lease.failure is not None:
             LOG.warning(
@@ -139,7 +139,7 @@ def run_explore_task(
                 lease.failure.status_code,
                 execute_ms,
             )
-            best_effort_release(client, project.project.id, intent.id, worker.name)
+            best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
             return "failed"
         if not did_timeout(first) and first.returncode == 0:
             try:
@@ -182,7 +182,7 @@ def run_explore_task(
                     int((time.perf_counter() - task_started) * 1000),
                     preview(first.stdout),
                 )
-                best_effort_release(client, project.project.id, intent.id, worker.name)
+                best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
                 return "rejected"
             return write_conclude_result(
                 client,
@@ -193,7 +193,7 @@ def run_explore_task(
                 source="explore_execute",
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
-                audit=audit,
+                audit=audit, lease_id=intent.lease_id,
             )
         if did_timeout(first):
             LOG.warning(
@@ -231,11 +231,11 @@ def run_explore_task(
             preview(first.stdout),
             preview(first.stderr),
         )
-        best_effort_release(client, project.project.id, intent.id, worker.name)
+        best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
         return "failed"
     except Exception:
         LOG.exception("explore task crashed project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
-        best_effort_release(client, project.project.id, intent.id, worker.name)
+        best_effort_release(client, project.project.id, intent.id, worker.name, intent.lease_id)
         return "failed"
     finally:
         lease.stop()
@@ -265,11 +265,11 @@ def _try_conclude_fallback(
             driver.supports_conclude(),
             bool(session),
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "failed"
     if lease.failure is not None:
         LOG.warning("conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s", project_id, intent.id, worker.name)
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "failed"
     if cancellation.is_cancelled:
         LOG.info(
@@ -279,7 +279,7 @@ def _try_conclude_fallback(
             worker.name,
             cancellation.reason,
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "cancelled"
 
     if not project_allows_conclude_fallback(
@@ -288,7 +288,7 @@ def _try_conclude_fallback(
         worker_name=worker.name,
         intent_id=intent.id,
     ):
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "failed"
 
     container_name = research_workspace(config, client, container_manager, project)
@@ -331,10 +331,10 @@ def _try_conclude_fallback(
             cancelled,
             conclude_ms,
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "cancelled"
     if lease.failure is not None:
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "failed"
     if result.timed_out or result.returncode != 0:
         LOG.warning(
@@ -348,7 +348,7 @@ def _try_conclude_fallback(
             preview(result.stdout),
             preview(result.stderr),
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "failed"
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
@@ -365,7 +365,7 @@ def _try_conclude_fallback(
             preview(result.stdout),
             preview(result.stderr),
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "failed"
     if kind == "rejected":
         LOG.warning(
@@ -376,7 +376,7 @@ def _try_conclude_fallback(
             conclude_ms,
             preview(result.stdout),
         )
-        best_effort_release(client, project_id, intent.id, worker.name)
+        best_effort_release(client, project_id, intent.id, worker.name, intent.lease_id)
         return "rejected"
     return write_conclude_result(
         client,
@@ -386,7 +386,7 @@ def _try_conclude_fallback(
         description,
         source="explore_conclude",
         phase_ms=conclude_ms,
-        audit=audit,
+        audit=audit, lease_id=intent.lease_id,
     )
 
 

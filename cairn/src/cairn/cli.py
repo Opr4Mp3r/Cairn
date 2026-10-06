@@ -140,7 +140,7 @@ def audit_probe(config_path: Path, target_file: Path, role: str, output_dir: Pat
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--repo", type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path))
 @click.option("--goal")
-@click.option("--project", "project_id", help="连接已有审计项目运行 Overseer 与终审；不重建项目")
+@click.option("--project", "project_id", help="恢复已有审计项目的复核与预算收尾；不重建项目或重置期限")
 @click.option("--once", is_flag=True, help="新建时只激活；连接已有项目时只执行一轮复核")
 @click.option("--retry-review", help="显式重试审核执行错误或失效申请，不重置项目期限")
 @click.option("--reference", "references", type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=Path), multiple=True)

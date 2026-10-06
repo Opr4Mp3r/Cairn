@@ -54,6 +54,44 @@ class AuditFactData(BaseModel):
         return items
 
 
+class AuditLease(BaseModel):
+    id: str
+    worker: str
+
+
+class ClosingResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["candidate", "no_candidate"]
+    from_: list[str] = Field(default_factory=list, alias="from")
+    description: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_candidate(self):
+        if not self.description.strip():
+            raise ValueError("closing requires a non-empty explanation")
+        if self.kind == "candidate":
+            if not self.from_ or len(self.from_) != len(set(self.from_)) or set(self.from_) & {"origin", "goal"}:
+                raise ValueError("candidate requires unique ordinary proof facts")
+        elif self.from_:
+            raise ValueError("no_candidate cannot contain proof facts")
+        return self
+
+
+class AuditClosing(BaseModel):
+    status: Literal["pending", "running", "success", "error", "stale"] = "pending"
+    input_digest: str | None = None
+    attempts: int = 0
+    max_attempts: int = 2
+    round_deadline: str | None = None
+    attempt_deadline: str | None = None
+    token: str | None = None
+    session: str | None = None
+    result: ClosingResult | None = None
+    error: str | None = None
+    request_id: str | None = None
+
+
 class AuditMetadata(BaseModel):
     project_id: str
     repo_path: str
@@ -65,7 +103,7 @@ class AuditMetadata(BaseModel):
     policy_digest: str
     budget: AuditBudget
     seed_ids: dict[str, str]
-    phase: Literal["preparing", "researching"] = "preparing"
+    phase: Literal["preparing", "researching", "draining", "finalizing", "closed"] = "preparing"
     completion_pending: bool = False
     audit_revision: int = 1
     reason_revision: int = 1
@@ -73,6 +111,10 @@ class AuditMetadata(BaseModel):
     research_deadline: str | None = None
     drain_deadline: str | None = None
     final_deadline: str | None = None
+    leases: dict[str, AuditLease] = Field(default_factory=dict)
+    draining_lease_ids: list[str] = Field(default_factory=list)
+    closing: AuditClosing = Field(default_factory=AuditClosing)
+    termination_reason: str | None = None
 
 
 class Settings(BaseModel):
@@ -103,8 +145,16 @@ class Intent(BaseModel):
     last_heartbeat_at: str | None = None
     created_at: str
     concluded_at: str | None = None
+    lease_id: str | None = None
 
     model_config = {"populate_by_name": True}
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.lease_id is None:
+            data.pop("lease_id", None)
+        return data
 
 
 class Hint(BaseModel):
@@ -119,12 +169,20 @@ class ProjectReason(BaseModel):
     trigger: str
     started_at: str
     last_heartbeat_at: str
+    lease_id: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.lease_id is None:
+            data.pop("lease_id", None)
+        return data
 
 
 class ProjectMeta(BaseModel):
     id: str
     title: str
-    status: Literal["active", "stopped", "completed"]
+    status: Literal["active", "stopped", "completed", "draining", "budget_exhausted"]
     bootstrap_enabled: bool
     created_at: str
     reason: ProjectReason | None = None
@@ -229,6 +287,7 @@ class CreateIntentRequest(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     worker: str
+    lease_id: str | None = None
 
     @field_validator("worker")
     @classmethod
@@ -256,6 +315,7 @@ class ConcludeRequest(BaseModel):
     worker: str
     description: str
     audit: AuditFactData | None = None
+    lease_id: str | None = None
 
     @field_validator("worker", "description")
     @classmethod
@@ -271,6 +331,7 @@ class CompleteRequest(BaseModel):
     description: str
     worker: str
     source_session: str | None = None
+    lease_id: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -536,4 +597,25 @@ class CompletionReviewRequest(BaseModel):
                 raise ValueError("execution error cannot contain a verdict")
         elif self.assessment is None or self.record.decision != self.assessment.decision:
             raise ValueError("successful review requires a matching assessment and decision")
+        return self
+
+
+class AuditBudgetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    finalize: bool = False
+
+
+class ClosingReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str
+    input_digest: str
+    record: AuditRecordRequest
+    result: ClosingResult | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self):
+        if self.record.phase != "closing" or self.record.object_type != "project" or self.record.decision is not None:
+            raise ValueError("closing is a project observation, not an approval")
+        if (self.record.attempt_status == "success") != (self.result is not None):
+            raise ValueError("only a successful closing can contain a result")
         return self

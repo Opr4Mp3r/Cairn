@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Response
 
 from cairn.server.db import get_conn
+from cairn.server.audit_budget import existing_research, register_lease, new_research
 from cairn.server.models import (
     CompleteRequest,
     AuditCompletion,
@@ -164,14 +165,19 @@ def update_project_title(project_id: str, body: UpdateProjectTitleRequest):
 @router.put("/projects/{project_id}/status", response_model=ProjectMeta)
 def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
     with get_conn() as conn:
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
         current_status = row["status"]
         metadata = audit_metadata(conn, project_id)
         if metadata is not None and metadata.phase == "preparing" and body.status == "active":
             raise HTTPException(409, "Preparing audit must be activated through audit/start")
-        if current_status == "completed":
+        if current_status in ("completed", "budget_exhausted"):
             raise HTTPException(409, "Completed projects cannot change status")
+        if metadata is not None and body.status == "active":
+            if metadata.phase in ("draining", "finalizing", "closed") or (metadata.research_deadline and utcnow() >= metadata.research_deadline):
+                raise HTTPException(409, "Audit research budget cannot be restarted")
         if current_status == body.status:
             return project_meta_from_row(row, conn)
 
@@ -216,6 +222,7 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
             """,
             (body.worker, body.trigger, now, now, project_id),
         )
+        register_lease(conn, project_id, "reason", body.worker)
         updated = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         return project_meta_from_row(updated, conn)
 
@@ -223,7 +230,9 @@ def claim_project_reason(project_id: str, body: ReasonClaimRequest):
 @router.post("/projects/{project_id}/reason/heartbeat", response_model=ProjectMeta)
 def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
     with get_conn() as conn:
-        check_project_active(conn, project_id)
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
+        existing_research(conn, project_id, "reason", body.worker, body.lease_id)
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
         current_worker = row["reason_worker"]
@@ -244,7 +253,13 @@ def heartbeat_project_reason(project_id: str, body: HeartbeatRequest):
 @router.post("/projects/{project_id}/reason/release", response_model=ProjectMeta)
 def release_project_reason(project_id: str, body: HeartbeatRequest):
     with get_conn() as conn:
-        check_project_active(conn, project_id)
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
+        project = get_project_or_404(conn, project_id)
+        if project["reason_worker"] is not None:
+            existing_research(conn, project_id, "reason", body.worker, body.lease_id)
+        elif project["status"] not in ("active", "draining"):
+            check_project_active(conn, project_id)
         expire_reason_leases(conn, project_id)
         row = get_project_or_404(conn, project_id)
         current_worker = row["reason_worker"]

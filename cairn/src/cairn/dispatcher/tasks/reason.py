@@ -43,7 +43,8 @@ def run_reason_task(
     driver = get_driver(worker.type, config.runtime.execution)
     task_started = time.perf_counter()
     healthcheck_timeout = config.runtime.healthcheck_timeout
-    lease = HeartbeatLease.for_reason(client, project.project.id, worker.name, config.runtime.interval)
+    lease_id = project.project.reason.lease_id if project.project.reason else None
+    lease = HeartbeatLease.for_reason(client, project.project.id, worker.name, config.runtime.interval, lease_id)
     lease.start()
     try:
         container_name = research_workspace(config, client, container_manager, project)
@@ -205,6 +206,8 @@ def run_reason_task(
             return "rejected"
         if kind == "complete":
             kwargs = {"source_session": session} if project.project.mode == "audit" else {}
+            if lease_id:
+                kwargs["lease_id"] = lease_id
             response = client.complete(project.project.id, data["from"], data["description"], worker.name, **kwargs)
             if response.status_code == 403:
                 LOG.info("project became inactive during reason complete project=%s worker=%s", project.project.id, worker.name)
@@ -284,4 +287,4 @@ def run_reason_task(
         return "success"
     finally:
         lease.stop()
-        best_effort_release_reason(client, project.project.id, worker.name)
+        best_effort_release_reason(client, project.project.id, worker.name, lease_id)

@@ -17,6 +17,7 @@ from cairn.server.services import (
     expire_reason_leases, expire_workers, get_project_or_404, json_text,
     next_hint_id, next_intent_id, next_review_id, utcnow,
 )
+from cairn.server.audit_budget import control_window, existing_research
 
 
 def _datetime(value: str) -> datetime:
@@ -237,8 +238,22 @@ def list_completions(conn, metadata: AuditMetadata) -> list[AuditCompletion]:
     return [_refresh_completion(conn, metadata, AuditCompletion.model_validate_json(row["data_json"])) for row in rows]
 
 
-def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest) -> AuditCompletion:
-    check_project_active(conn, metadata.project_id)
+def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest, *, closing=False) -> AuditCompletion:
+    control_window(conn, metadata)
+    row = get_project_or_404(conn, metadata.project_id)
+    if not closing and (row["status"] == "draining" or utcnow() >= metadata.research_deadline):
+        if metadata.phase == "finalizing":
+            raise HTTPException(403, "Only persisted closing candidates may submit after research is closed")
+        scope = next((scope for scope, lease in metadata.leases.items()
+                      if lease.id == body.lease_id and lease.worker == body.worker), "reason")
+        if scope.startswith("intent:"):
+            intent = conn.execute("SELECT to_fact_id FROM intents WHERE project_id=? AND id=?",
+                                  (metadata.project_id, scope.split(":", 1)[1])).fetchone()
+            if (intent is None or intent["to_fact_id"] not in body.from_ or body.lease_id not in metadata.draining_lease_ids
+                    or utcnow() >= metadata.drain_deadline):
+                raise HTTPException(409, "Intent completion must use its admitted result")
+        else:
+            existing_research(conn, metadata.project_id, scope, body.worker, body.lease_id)
     if len(body.from_) != len(set(body.from_)) or set(body.from_) & {"origin", "goal"}:
         raise HTTPException(400, "Completion requires unique ordinary proof facts")
     digest = proof_digest(conn, metadata, body.from_)
@@ -261,11 +276,11 @@ def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest) -> A
 
 
 def claim_completion(conn, metadata: AuditMetadata, request: AuditCompletion, body: CompletionClaimRequest) -> AuditCompletion:
-    check_project_active(conn, metadata.project_id)
+    control_window(conn, metadata)
     request = _refresh_completion(conn, metadata, request)
     now = _datetime(utcnow())
     if metadata.final_deadline is None or now >= _datetime(metadata.final_deadline):
-        raise HTTPException(409, "Final review deadline exhausted; CP5 budget lifecycle is not implemented")
+        raise HTTPException(409, "Final review deadline exhausted")
     if request.status in ("approved", "rejected", "needs_evidence"):
         raise HTTPException(409, "No new proof evidence to review")
     if request.review_token is not None:
@@ -318,7 +333,7 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
             raise HTTPException(409, "Receipt belongs to a different proof")
         store_record(conn, metadata.project_id, body.record)
         return completion_by_id(conn, metadata.project_id, request.id)
-    check_project_active(conn, metadata.project_id)
+    control_window(conn, metadata)
     if request.review_token != body.token or body.record.object_id != metadata.project_id:
         raise HTTPException(409, "Review attempt no longer owns this request")
     if not metadata.final_deadline or utcnow() >= metadata.final_deadline:
@@ -329,6 +344,9 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
         raise HTTPException(400, "Review record is not bound to this proof")
     if body.record.attempt_status == "success" and (not body.record.session or body.record.session == request.source_session):
         raise HTTPException(400, "Final review requires a distinct independent session")
+    if (body.record.attempt_status == "success" and metadata.closing.request_id == request.id
+            and body.record.session == metadata.closing.session):
+        raise HTTPException(400, "Final review cannot reuse the candidate closing session")
     stale = (body.expected_audit_revision != metadata.audit_revision or
              body.policy_digest != metadata.policy_digest or body.proof_digest != request.proof_digest or
              proof_digest(conn, metadata, request.from_) != request.proof_digest)
@@ -352,6 +370,7 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
             raise HTTPException(409, "Proof depends on an unsupported premise")
         for fact in closure.values():
             validate_fact_evidence(metadata, fact["audit"])
+        control_window(conn, metadata)
         edge = next_intent_id(conn, metadata.project_id)
         now = utcnow()
         conn.execute("INSERT INTO intents (id,project_id,to_fact_id,description,creator,worker,last_heartbeat_at,created_at,concluded_at) "
@@ -360,6 +379,10 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
         conn.executemany("INSERT INTO intent_sources VALUES (?, ?, ?)",
                          [(edge, metadata.project_id, fact_id) for fact_id in request.from_])
         conn.execute("UPDATE projects SET status='completed' WHERE id=?", (metadata.project_id,))
+        metadata.phase = "closed"
+        metadata.termination_reason = "goal_approved"
+        from cairn.server.services import save_audit_metadata
+        save_audit_metadata(conn, metadata)
         clear_project_reason(conn, metadata.project_id)
     store_record(conn, metadata.project_id, body.record)
     request.review_token = request.review_owner = None

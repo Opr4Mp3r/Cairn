@@ -22,7 +22,7 @@ from cairn.dispatcher.workers.registry import get_driver
 from cairn.dispatcher.tasks.bootstrap import run_bootstrap_task
 from cairn.dispatcher.tasks.explore import run_explore_task
 from cairn.dispatcher.tasks.reason import run_reason_task
-from cairn.server.models import Intent, ProjectDetail, ProjectSummary
+from cairn.server.models import Intent, ProjectDetail, ProjectMeta, ProjectSummary
 
 LOG = logging.getLogger(__name__)
 UNHEALTHY_RETRY_AFTER_SECONDS = 5
@@ -88,6 +88,7 @@ class DispatcherLoop:
                     self._reap_futures()
                     self._reap_cleanup_futures()
                     summaries = self.client.list_projects()
+                    summaries = self._advance_audit_budgets(summaries)
                     self._initialize_reason_checkpoints(summaries)
                     self._refresh_runtime_projects(summaries)
                     self._cancel_inactive_tasks(summaries)
@@ -401,6 +402,8 @@ class DispatcherLoop:
                 claim.status_code,
             )
             return False
+        if project.project.mode == "audit" and isinstance(claim.data, dict):
+            project.project.reason = ProjectMeta.model_validate(claim.data).reason
         try:
             future = self.executor.submit(
                 run_reason_task,
@@ -469,6 +472,8 @@ class DispatcherLoop:
                 claim.status_code,
             )
             return False
+        if project.project.mode == "audit" and isinstance(claim.data, dict):
+            intent.lease_id = claim.data.get("lease_id")
         try:
             future = self.executor.submit(
                 run_bootstrap_task,
@@ -527,6 +532,8 @@ class DispatcherLoop:
                 claim.status_code,
             )
             return False
+        if project.project.mode == "audit" and isinstance(claim.data, dict):
+            intent.lease_id = claim.data.get("lease_id")
         try:
             future = self.executor.submit(
                 run_explore_task,
@@ -807,7 +814,7 @@ class DispatcherLoop:
 
     def _cleanup_stopped_containers(self, summaries: list[ProjectSummary]) -> None:
         for summary in summaries:
-            if summary.status != "stopped":
+            if summary.status not in ("stopped", "budget_exhausted"):
                 continue
             if self._inactive_cleanup_done.get(summary.id) == summary.status:
                 continue
@@ -842,7 +849,7 @@ class DispatcherLoop:
                 LOG.exception("container cleanup failed container=%s", name)
 
     def _refresh_runtime_projects(self, summaries: list[ProjectSummary]) -> None:
-        active_ids = {summary.id for summary in summaries if summary.status == "active"}
+        active_ids = {summary.id for summary in summaries if summary.status in ("active", "draining")}
         self.runtime_project_ids.intersection_update(active_ids)
         inactive_status_by_id = {summary.id: summary.status for summary in summaries if summary.status != "active"}
         for project_id, status in list(self._inactive_cleanup_done.items()):
@@ -851,7 +858,10 @@ class DispatcherLoop:
                 self._inactive_cleanup_done.pop(project_id, None)
 
     def _cancel_inactive_tasks(self, summaries: list[ProjectSummary]) -> None:
-        status_by_project = {summary.id: summary.status for summary in summaries}
+        status_by_project = {
+            summary.id: "active" if summary.status == "draining" and summary.audit and summary.audit.phase == "draining" else summary.status
+            for summary in summaries
+        }
         for task in self.futures.values():
             status = status_by_project.get(task.project_id, "deleted")
             if status != "active" and task.cancellation.cancel(status):
@@ -862,6 +872,17 @@ class DispatcherLoop:
                     task.worker_name,
                     status,
                 )
+
+    def _advance_audit_budgets(self, summaries: list[ProjectSummary]) -> list[ProjectSummary]:
+        for index, summary in enumerate(summaries):
+            if summary.mode != "audit" or summary.status not in ("active", "draining"):
+                continue
+            response = self.client.audit_budget(summary.id)
+            if not response.ok:
+                raise RuntimeError(f"audit budget update failed project={summary.id}: {response.status_code} {response.text}")
+            project = ProjectMeta.model_validate(response.data)
+            summaries[index] = summary.model_copy(update={"status": project.status, "audit": project.audit})
+        return summaries
 
     def _initialize_reason_checkpoints(self, summaries: list[ProjectSummary]) -> None:
         for summary in summaries:

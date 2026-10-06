@@ -71,7 +71,7 @@ def write_graph_snapshot_reference(
 
 def project_allows_conclude_fallback(client: CairnClient, project_id: str, *, worker_name: str, intent_id: str) -> bool:
     project = client.get_project(project_id)
-    if project.project.status == "active":
+    if project.project.status == "active" or (project.project.status == "draining" and project.project.audit.phase == "draining"):
         return True
     LOG.info(
         "skip conclude fallback because project is no longer active project=%s intent=%s worker=%s status=%s",
@@ -83,8 +83,8 @@ def project_allows_conclude_fallback(client: CairnClient, project_id: str, *, wo
     return False
 
 
-def best_effort_release_reason(client: CairnClient, project_id: str, worker_name: str) -> None:
-    response = client.release_reason(project_id, worker_name)
+def best_effort_release_reason(client: CairnClient, project_id: str, worker_name: str, lease_id=None) -> None:
+    response = client.release_reason(project_id, worker_name, lease_id=lease_id) if lease_id else client.release_reason(project_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
             "reason release failed project=%s worker=%s status=%s",
@@ -114,6 +114,7 @@ def write_conclude_result(
     phase_ms: int,
     total_ms: int | None = None,
     audit=None,
+    lease_id=None,
 ) -> str:
     return write_conclude_result_with_fact_id(
         client,
@@ -125,6 +126,7 @@ def write_conclude_result(
         phase_ms=phase_ms,
         total_ms=total_ms,
         audit=audit,
+        lease_id=lease_id,
     ).status
 
 
@@ -139,8 +141,12 @@ def write_conclude_result_with_fact_id(
     phase_ms: int,
     total_ms: int | None = None,
     audit=None,
+    lease_id=None,
 ) -> ConcludeWriteResult:
-    response = client.conclude(project_id, intent_id, worker_name, description, audit=audit) if audit is not None else client.conclude(project_id, intent_id, worker_name, description)
+    kwargs = {"audit": audit} if audit is not None else {}
+    if lease_id:
+        kwargs["lease_id"] = lease_id
+    response = client.conclude(project_id, intent_id, worker_name, description, **kwargs)
     if response.ok:
         fact_id: str | None = None
         if isinstance(response.data, dict):
@@ -185,12 +191,12 @@ def write_conclude_result_with_fact_id(
             response.status_code,
             response.text,
         )
-    best_effort_release(client, project_id, intent_id, worker_name)
+    best_effort_release(client, project_id, intent_id, worker_name, lease_id)
     return ConcludeWriteResult(status="failed", fact_id=None)
 
 
-def best_effort_release(client: CairnClient, project_id: str, intent_id: str, worker_name: str) -> None:
-    response = client.release(project_id, intent_id, worker_name)
+def best_effort_release(client: CairnClient, project_id: str, intent_id: str, worker_name: str, lease_id=None) -> None:
+    response = client.release(project_id, intent_id, worker_name, lease_id=lease_id) if lease_id else client.release(project_id, intent_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
             "release failed project=%s intent=%s worker=%s status=%s",

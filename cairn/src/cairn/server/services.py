@@ -45,6 +45,9 @@ def has_pending_completion(conn: sqlite3.Connection, project_id: str) -> bool:
 
 
 def check_new_research_allowed(conn: sqlite3.Connection, project_id: str) -> None:
+    from cairn.server.audit_budget import new_research
+
+    new_research(conn, project_id)
     if get_project_or_404(conn, project_id)["mode"] == "audit" and has_pending_completion(conn, project_id):
         raise HTTPException(409, "Audit completion is awaiting independent review; new research is paused")
 
@@ -136,7 +139,7 @@ def check_project_active(conn: sqlite3.Connection, project_id: str) -> sqlite3.R
 
 def check_project_hint_writable(conn: sqlite3.Connection, project_id: str) -> sqlite3.Row:
     row = get_project_or_404(conn, project_id)
-    if row["status"] not in ("active", "stopped", "completed"):
+    if row["status"] not in ("active", "stopped", "completed", "draining", "budget_exhausted"):
         raise HTTPException(403, f"Project is {row['status']}")
     return row
 
@@ -224,6 +227,8 @@ def intent_to_model(conn: sqlite3.Connection, row: sqlite3.Row, project_id: str)
         "SELECT fact_id FROM intent_sources WHERE intent_id = ? AND project_id = ? ORDER BY rowid",
         (row["id"], project_id),
     ).fetchall()
+    metadata = audit_metadata(conn, project_id)
+    lease = metadata.leases.get(f"intent:{row['id']}") if metadata else None
     return Intent(
         id=row["id"],
         **{"from": [s["fact_id"] for s in sources]},
@@ -234,6 +239,7 @@ def intent_to_model(conn: sqlite3.Connection, row: sqlite3.Row, project_id: str)
         last_heartbeat_at=row["last_heartbeat_at"],
         created_at=row["created_at"],
         concluded_at=row["concluded_at"],
+        lease_id=lease.id if lease and lease.worker == row["worker"] and row["to_fact_id"] is None else None,
     )
 
 
@@ -267,15 +273,19 @@ def project_reason_from_row(row: sqlite3.Row) -> ProjectReason | None:
 
 
 def project_meta_from_row(row: sqlite3.Row, conn: sqlite3.Connection) -> ProjectMeta:
+    metadata = audit_metadata(conn, row["id"]) if row["mode"] == "audit" else None
+    reason = project_reason_from_row(row)
+    if reason and metadata and "reason" in metadata.leases:
+        reason.lease_id = metadata.leases["reason"].id
     return ProjectMeta(
         id=row["id"],
         title=row["title"],
         status=row["status"],
         bootstrap_enabled=bool(row["bootstrap_enabled"]),
         created_at=row["created_at"],
-        reason=project_reason_from_row(row),
+        reason=reason,
         mode=row["mode"],
-        audit=audit_metadata(conn, row["id"]) if row["mode"] == "audit" else None,
+        audit=metadata,
     )
 
 

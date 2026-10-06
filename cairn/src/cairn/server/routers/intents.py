@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from cairn.server.db import get_conn
+from cairn.server.audit_budget import existing_research, register_lease
 from cairn.server.models import (
     AuditFactData,
     ConcludeRequest,
@@ -66,6 +67,7 @@ def create_intent(project_id: str, body: CreateIntentRequest):
                 (iid, project_id, fid),
             )
         bump_audit_revision(conn, project_id, reason=False)
+        lease_id = register_lease(conn, project_id, f"intent:{iid}", body.worker) if claimed else None
 
         return Intent(
             id=iid,
@@ -77,6 +79,7 @@ def create_intent(project_id: str, body: CreateIntentRequest):
             last_heartbeat_at=now if claimed else None,
             created_at=now,
             concluded_at=None,
+            lease_id=lease_id,
         )
 
 
@@ -88,10 +91,16 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
     with get_conn() as conn:
         if get_project_or_404(conn, project_id)["mode"] == "audit":
             conn.execute("BEGIN IMMEDIATE")
-        check_project_active(conn, project_id)
+        else:
+            check_project_active(conn, project_id)
         row = get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
         if row["worker"] is None:
+            if body.lease_id is not None:
+                raise HTTPException(409, "Expired lease cannot be reclaimed by its old attempt")
             check_new_research_allowed(conn, project_id)
+            register_lease(conn, project_id, f"intent:{intent_id}", body.worker)
+        else:
+            existing_research(conn, project_id, f"intent:{intent_id}", body.worker, body.lease_id)
 
         now = utcnow()
         conn.execute(
@@ -112,8 +121,13 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
 )
 def release(project_id: str, intent_id: str, body: HeartbeatRequest):
     with get_conn() as conn:
-        check_project_active(conn, project_id)
+        if get_project_or_404(conn, project_id)["mode"] == "audit":
+            conn.execute("BEGIN IMMEDIATE")
         row = get_releasable_open_intent_or_404(conn, project_id, intent_id, body.worker)
+        if row["worker"] is not None:
+            existing_research(conn, project_id, f"intent:{intent_id}", body.worker, body.lease_id)
+        elif get_project_or_404(conn, project_id)["status"] not in ("active", "draining"):
+            check_project_active(conn, project_id)
 
         if row["worker"] == body.worker:
             conn.execute(
@@ -136,10 +150,16 @@ def conclude(project_id: str, intent_id: str, body: ConcludeRequest):
     with get_conn() as conn:
         if get_project_or_404(conn, project_id)["mode"] == "audit":
             conn.execute("BEGIN IMMEDIATE")
-        project = check_project_active(conn, project_id)
+        else:
+            check_project_active(conn, project_id)
+        project = get_project_or_404(conn, project_id)
         claimed = get_claimable_open_intent_or_404(conn, project_id, intent_id, body.worker)
         if claimed["worker"] is None:
+            if body.lease_id is not None:
+                raise HTTPException(409, "Expired lease cannot write a result")
             check_new_research_allowed(conn, project_id)
+        else:
+            existing_research(conn, project_id, f"intent:{intent_id}", body.worker, body.lease_id)
 
         now = utcnow()
         fid = next_fact_id(conn, project_id)

@@ -11,7 +11,9 @@ from fastapi import APIRouter, HTTPException, Response
 
 from cairn.server.db import get_conn
 from cairn.server.models import (AuditCompletion, AuditDetail, AuditMetadata, AuditRecord, AuditRecordRequest,
+                                AuditBudgetRequest, AuditClosing, ClosingReviewRequest, ProjectMeta,
                                 CompletionClaimRequest, CompletionReviewRequest, CreateAuditRequest, ProjectDetail)
+from cairn.server.audit_budget import advance_budget, claim_closing, finish_closing, submit_closing, control_window
 from cairn.server.audit_review import (
     apply_node_review, claim_completion, completion_by_id, finish_completion,
     list_completions, node_input, store_record,
@@ -189,12 +191,11 @@ def record_review(project_id: str, body: AuditRecordRequest, response: Response)
         if not created:
             response.status_code = 200
             return record
-        if body.phase == "final_review":
-            raise HTTPException(400, "Final review must use its completion request endpoint")
+        if body.phase in ("final_review", "closing"):
+            raise HTTPException(400, "Final review and closing must use their dedicated endpoints")
         metadata = _audit_or_404(conn, project_id)
         if body.phase == "overseer":
-            if get_project_or_404(conn, project_id)["status"] != "active":
-                raise HTTPException(403, "Overseer requires an active audit")
+            control_window(conn, metadata)
         apply_node_review(conn, metadata, body)
         if body.phase == "overseer" and body.attempt_status == "success":
             record.output_digest = json_digest(node_input(conn, metadata, body.object_type, body.object_id))
@@ -230,3 +231,32 @@ def completion_review(project_id: str, request_id: str, body: CompletionReviewRe
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         return finish_completion(conn, _audit_or_404(conn, project_id), completion_by_id(conn, project_id, request_id), body)
+
+
+@router.post("/projects/{project_id}/audit/budget", response_model=ProjectMeta)
+def audit_budget(project_id: str, body: AuditBudgetRequest):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        advance_budget(conn, project_id, finalize=body.finalize)
+        return project_meta_from_row(get_project_or_404(conn, project_id), conn)
+
+
+@router.post("/projects/{project_id}/audit/closing/claim", response_model=AuditClosing)
+def closing_claim(project_id: str, body: CompletionClaimRequest):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return claim_closing(conn, _audit_or_404(conn, project_id), body)
+
+
+@router.post("/projects/{project_id}/audit/closing", response_model=AuditClosing)
+def closing_review(project_id: str, body: ClosingReviewRequest):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return finish_closing(conn, _audit_or_404(conn, project_id), body)
+
+
+@router.post("/projects/{project_id}/audit/closing/submit", response_model=AuditCompletion)
+def closing_submit(project_id: str):
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        return submit_closing(conn, _audit_or_404(conn, project_id))

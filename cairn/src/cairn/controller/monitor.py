@@ -18,7 +18,7 @@ from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.tasks.audit import research_workspace
 from cairn.server.models import (
     AuditCompletion, AuditFactData, AuditRecordRequest, CompletionClaimRequest,
-    CompletionReviewRequest, FinalAssessment,
+    CompletionReviewRequest, FinalAssessment, ClosingResult, ClosingReviewRequest, AuditClosing,
 )
 
 
@@ -85,7 +85,7 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
     try:
         if cancellation.is_cancelled:
             raise KeyboardInterrupt(cancellation.reason or "controller cancelled before Agent call")
-        result = call_agent(config, backend, role="reviewer", prompt=prompt, result_model=model,
+        result = call_agent(config, backend, role="builder" if phase == "closing" else "reviewer", prompt=prompt, result_model=model,
                             workspace=workspace, timeout_seconds=timeout, phase=phase, cancellation=cancellation)
         if result.status == "cancelled":
             cancellation.cancel(result.error or result.process.cancel_reason or "Agent call interrupted")
@@ -117,14 +117,21 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
     project = client.get_project(project_id)
     if project.project.audit is None:
         raise ValueError("project is not an audit")
-    if project.project.status != "active":
+    if project.project.status in ("active", "draining"):
+        _require_ok(client.audit_budget(project_id), "advance audit budget")
+        project = client.get_project(project_id)
+    if project.project.status not in ("active", "draining"):
         return {"project_id": project_id, "status": project.project.status, "reviewed": 0}
     research_workspace(config, client, backend, project)
     reviewed = 0
     targets = [("fact", fact.id) for fact in project.facts if fact.id not in ("origin", "goal")]
-    targets += [("intent", intent.id) for intent in project.intents if intent.to is None]
+    if project.project.audit.phase != "finalizing":
+        targets += [("intent", intent.id) for intent in project.intents if intent.to is None]
     for kind, object_id in targets:
         if cancellation.is_cancelled:
+            break
+        timeout = min(config.controller.timeouts.overseer, _remaining(project.project.audit.final_deadline))
+        if timeout <= 0:
             break
         inputs = client.get_review_input(project_id, kind, object_id)
         records = [record for record in client.get_audit(project_id).records
@@ -135,7 +142,7 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
         if attempts >= config.controller.review.max_attempts:
             continue
         result, artifact = _invoke(config, client, backend, project, phase="overseer", context=inputs["context"],
-                                   model=NodeAssessment, timeout=config.controller.timeouts.overseer, cancellation=cancellation)
+                                   model=NodeAssessment, timeout=timeout, cancellation=cancellation)
         success = result.status == "success"
         data = NodeAssessment.model_validate(result.data) if success else None
         body = AuditRecordRequest(
@@ -153,16 +160,25 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
             body = body.model_copy(update={"attempt_status": "error", "decision": None, "fact_audit": None,
                                           "hint": None, "error": f"复核结果未满足服务端证据约束：{response.text}"})
             response = client.record_audit_review(project_id, body)
+        if response.status_code == 409 and _remaining(project.project.audit.final_deadline) <= 0:
+            break
         _require_ok(response, "apply Overseer review")
         reviewed += 1
         project = client.get_project(project_id)
 
     if cancellation.is_cancelled:
         return {"project_id": project_id, "status": "cancelled", "reviewed": reviewed}
+    _require_ok(client.audit_budget(project_id), "advance audit budget")
     project = client.get_project(project_id)
-    requests = client.list_completions(project_id)
+    if project.project.status not in ("active", "draining"):
+        return {"project_id": project_id, "status": project.project.status, "reviewed": reviewed}
     if project.project.reason is not None or any(intent.worker is not None and intent.to is None for intent in project.intents):
         return {"project_id": project_id, "status": project.project.status, "reviewed": reviewed, "waiting": "existing research leases"}
+    if project.project.audit.phase == "finalizing":
+        _closing_once(config, client, backend, project, cancellation)
+        if cancellation.is_cancelled:
+            return {"project_id": project_id, "status": "cancelled", "reviewed": reviewed}
+    requests = client.list_completions(project_id)
     retry_consumed = None
     for request in requests:
         if cancellation.is_cancelled:
@@ -211,11 +227,13 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
                 continue
         _require_ok(response, "submit final review")
         reviewed += 1
-        if client.get_project(project_id).project.status != "active":
+        if client.get_project(project_id).project.status not in ("active", "draining"):
             break
+    if not cancellation.is_cancelled:
+        _require_ok(client.audit_budget(project_id, finalize=True), "settle audit budget")
     return {"project_id": project_id, "status": "cancelled" if cancellation.is_cancelled else client.get_project(project_id).project.status,
             "reviewed": reviewed, "retry_review_consumed": retry_consumed,
-            "note": "CP4 implements oversight and final review; draining, closing and full recovery remain CP5."}
+            "note": "Research budget, persisted closing and independent review keep the original deadlines."}
 
 
 def monitor_audit(config, client, backend, project_id: str, *, once=False, cancellation=None, retry_review=None, report=None) -> dict:
@@ -226,7 +244,47 @@ def monitor_audit(config, client, backend, project_id: str, *, once=False, cance
             retry_review = None
         if report:
             report(result)
-        if cancellation.is_cancelled or once or result["status"] != "active":
+        if cancellation.is_cancelled or once or result["status"] not in ("active", "draining"):
             return result
         time.sleep(config.controller.poll_interval)
     return {"project_id": project_id, "status": "cancelled"}
+
+
+def _closing_once(config, client, backend, project, cancellation):
+    project_id = project.project.id
+    response = client.claim_closing(project_id, CompletionClaimRequest(
+        owner=uuid.uuid4().hex, timeout_seconds=config.controller.timeouts.closing,
+        max_attempts=config.controller.review.max_attempts,
+    ))
+    if response.status_code == 409:
+        return
+    closing = AuditClosing.model_validate(_require_ok(response, "claim read-only closing"))
+    if closing.status != "success":
+        timeout = min(config.controller.timeouts.closing, _remaining(closing.attempt_deadline))
+        if timeout <= 0:
+            return
+        project = client.get_project(project_id)
+        result, artifact = _invoke(config, client, backend, project, phase="closing",
+                                   context={"graph": project.model_dump(mode="json", by_alias=True),
+                                            "policy": project.project.audit.policy},
+                                   model=ClosingResult, timeout=timeout, cancellation=cancellation)
+        success = result.status == "success"
+        record = AuditRecordRequest(
+            record_key=f"closing:{closing.token}", object_type="project", object_id=project_id,
+            input_digest=closing.input_digest, phase="closing", session=result.session,
+            attempt_status="success" if success else "error", error=None if success else result.error or result.status,
+            result=result.data, artifacts=[str(artifact)],
+        )
+        body = ClosingReviewRequest(token=closing.token, input_digest=closing.input_digest, record=record,
+                                    result=ClosingResult.model_validate(result.data) if success else None)
+        response = client.finish_closing(project_id, body)
+        if response.status_code in (400, 409, 422):
+            body = body.model_copy(update={"result": None, "record": record.model_copy(update={
+                "attempt_status": "error", "error": f"结案结果未获服务端接受：{response.text}",
+            })})
+            response = client.finish_closing(project_id, body)
+            if response.status_code == 409:
+                return
+        closing = AuditClosing.model_validate(_require_ok(response, "persist closing result"))
+    if not cancellation.is_cancelled and closing.status == "success" and closing.result.kind == "candidate" and not closing.request_id:
+        _require_ok(client.submit_closing(project_id), "submit persisted closing candidate")
