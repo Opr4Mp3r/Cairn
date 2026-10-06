@@ -29,7 +29,8 @@ def main():
 )
 @click.option("--log-level", default="info", show_default=True, help="Uvicorn log level")
 @click.option("--access-log/--no-access-log", default=True, show_default=True, help="Enable Uvicorn access log")
-def serve(host: str, port: int, db_path: str, log_level: str, access_log: bool):
+@click.option("--fd", type=int, hidden=True, help="Inherited listening socket for the local launcher")
+def serve(host: str, port: int, db_path: str, log_level: str, access_log: bool, fd: int | None):
     """Start the Cairn API server."""
     db.configure(Path(db_path))
     from cairn.server.app import app
@@ -40,6 +41,7 @@ def serve(host: str, port: int, db_path: str, log_level: str, access_log: bool):
         port=port,
         log_level=log_level.lower(),
         access_log=access_log,
+        fd=fd,
     )
 
 
@@ -62,6 +64,13 @@ def dispatch(config_path: Path, once: bool, startup_healthcheck_only: bool, log_
     """Run the Cairn dispatcher."""
     configure_logging(log_level, bare=startup_healthcheck_only)
     loop = DispatcherLoop(config_path)
+    def terminate(_signum, _frame):
+        if getattr(loop, "_stopping", False):
+            return
+        loop.cancel_running_tasks("dispatcher received termination signal")
+        raise KeyboardInterrupt("dispatcher received termination signal")
+
+    previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         if startup_healthcheck_only:
             loop.run_startup_healthchecks_only()
@@ -69,6 +78,9 @@ def dispatch(config_path: Path, once: bool, startup_healthcheck_only: bool, log_
         loop.run(once=once)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 @main.command("audit-probe")

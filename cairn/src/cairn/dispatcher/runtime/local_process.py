@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 import signal
 import subprocess
+import sys
 import threading
 from contextlib import suppress
 
 from cairn.dispatcher.runtime.process import ProcessResult
+from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
 
 LOG = logging.getLogger(__name__)
 
@@ -46,10 +49,17 @@ class LocalProcess:
         self._timed_out = False
         self._cancel_reason: str | None = None
         self._kill_lock = threading.Lock()
+        self._registry_file: Path | None = None
 
     def start(self) -> None:
+        command = self.command
+        registry = os.environ.get(REGISTRY_ENV)
+        if registry:
+            # 子进程先登记再 exec，即使父进程退出，启动器仍有本次组的回收凭据。
+            command = [sys.executable, "-B", str(Path(__file__).with_name("owned_process.py")),
+                       str(os.getpid()), registry, *command]
         self._process = subprocess.Popen(
-            self.command,
+            command,
             cwd=self._cwd,
             env=self.env,
             stdout=subprocess.PIPE,
@@ -59,6 +69,8 @@ class LocalProcess:
             errors="replace",
             start_new_session=True,
         )
+        if registry:
+            self._registry_file = Path(registry) / f"{self._process.pid}.json"
         self._stdout_thread = threading.Thread(
             target=self._drain, args=(self._process.stdout, self._stdout_chunks), daemon=True
         )
@@ -85,6 +97,11 @@ class LocalProcess:
         returncode = self._process.returncode
         if returncode is None:
             returncode = 137 if self._timed_out else 1
+        if self._registry_file is not None:
+            try:
+                os.killpg(self._process.pid, 0)
+            except ProcessLookupError:
+                self._registry_file.unlink(missing_ok=True)
         return ProcessResult(
             returncode=returncode,
             stdout="".join(self._stdout_chunks),

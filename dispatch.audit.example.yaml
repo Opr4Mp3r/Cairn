@@ -34,3 +34,16 @@ controller:
     reviewer: claude-main
   poll_interval: 3
   max_goal_revisions: 2
+  timeouts:
+    build: 180
+    preflight: 120
+    seed_review: 120
+    overseer: 90
+    closing: 120
+    final_review: 120
+  review:
+    max_attempts: 2
+  budget:
+    research_seconds: 600
+    drain_seconds: 60
+    final_review_seconds: 600

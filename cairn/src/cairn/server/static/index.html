@@ -311,6 +311,7 @@
               </button>
             </div>
             <div class="mt-2 flex flex-wrap items-center gap-1.5">
+              <span x-show="p.mode === 'audit'" class="text-[11px] text-sky-700" x-text="`Audit · ${auditPhaseLabel(p)}`"></span>
               <template x-if="p.reason">
                 <div class="inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 reason-chip-running">
                   <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M18.364 5.636 16.95 7.05"/><path d="M21 12h-3"/><path d="m18.364 18.364-1.414-1.414"/><path d="M12 21v-3"/><path d="m7.05 16.95-1.414 1.414"/><path d="M6 12H3"/><path d="M7.05 7.05 5.636 5.636"/><circle cx="12" cy="12" r="3.5"/></svg>
@@ -362,18 +363,18 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M8.25 12h7.5M8.25 15h5.25"/></svg>
                 Snapshot
               </button>
-              <template x-if="p.status !== 'completed'">
+              <template x-if="canToggleProject(p)">
                 <button type="button" @click.stop="toggleProjectStopById(p.id, p.status)"
                   class="px-2 py-1 rounded-lg border text-[11px] transition flex items-center gap-1"
-                  :class="p.status === 'active'
+                  :class="p.status !== 'stopped'
                     ? 'border-amber-200 text-amber-600 hover:bg-amber-50'
                     : 'border-teal-200 text-teal-600 hover:bg-teal-50'">
-                  <svg x-show="p.status === 'active'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+                  <svg x-show="p.status !== 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
                   <svg x-show="p.status === 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>
-                  <span x-text="p.status === 'active' ? 'Stop' : 'Resume'"></span>
+                  <span x-text="p.status === 'stopped' ? 'Resume' : 'Stop'"></span>
                 </button>
               </template>
-              <template x-if="p.status === 'completed'">
+              <template x-if="canReopenProject(p)">
                 <button type="button" @click.stop="openReopenProject(p.id, p.title)"
                   class="px-2 py-1 rounded-lg border border-sky-200 text-[11px] text-sky-600 hover:bg-sky-50 transition flex items-center gap-1">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 3v6h6"/></svg>
@@ -449,18 +450,18 @@
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M8.25 12h7.5M8.25 15h5.25"/></svg>
         Snapshot
       </button>
-      <template x-if="!replay.active && project.project.status !== 'completed'">
+      <template x-if="!replay.active && canToggleProject(project.project)">
         <button @click="toggleProjectStop()"
           class="px-2.5 py-1 rounded-lg border text-xs transition flex items-center gap-1.5"
-          :class="project.project.status === 'active'
+          :class="project.project.status !== 'stopped'
             ? 'border-amber-200 text-amber-600 hover:bg-amber-50'
             : 'border-teal-200 text-teal-600 hover:bg-teal-50'">
-          <svg x-show="project.project.status === 'active'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+          <svg x-show="project.project.status !== 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
           <svg x-show="project.project.status === 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>
-          <span x-text="project.project.status === 'active' ? 'Stop' : 'Resume'"></span>
+          <span x-text="project.project.status === 'stopped' ? 'Resume' : 'Stop'"></span>
         </button>
       </template>
-      <template x-if="!replay.active && project.project.status === 'completed'">
+      <template x-if="!replay.active && canReopenProject(project.project)">
         <button @click="openReopenProject(project.project.id, project.project.title)"
           class="px-2.5 py-1 rounded-lg border border-sky-200 text-xs text-sky-600 hover:bg-sky-50 transition flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 3v6h6"/></svg>
@@ -588,6 +589,24 @@
 
       <!-- Detail -->
       <div x-show="sideTab === 'detail'" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/40">
+        <template x-if="!replay.active && project.project.audit">
+          <section class="rounded-2xl border border-sky-200 bg-white p-4 space-y-3 text-xs">
+            <h3 class="font-semibold text-sky-700">审计状态</h3>
+            <p x-text="`阶段：${auditPhaseLabel(project.project)}`"></p>
+            <p x-text="`项目状态：${project.project.status}`"></p>
+            <p x-text="`最终期限：${formatTime(project.project.audit.final_deadline)}`"></p>
+            <p x-text="`结案判断：${project.project.audit.closing?.status || 'pending'}`"></p>
+            <p x-show="project.project.audit.termination_reason" class="break-words" x-text="`结束原因：${project.project.audit.termination_reason}`"></p>
+            <p x-show="auditLoadError" class="text-rose-600" x-text="auditLoadError"></p>
+            <template x-for="request in auditRequests" :key="request.id">
+              <div class="border-t border-slate-100 pt-2 space-y-1">
+                <p class="break-all" x-text="`申请 ${request.id}：${request.status}`"></p>
+                <p x-show="request.decision" x-text="`验收判断：${request.decision}`"></p>
+                <p x-show="request.error" class="text-amber-700 break-words" x-text="request.error"></p>
+              </div>
+            </template>
+          </section>
+        </template>
         <template x-if="!selectedNode">
           <div class="rounded-2xl border border-dashed border-slate-200 bg-white/80 px-5 py-10 text-center shadow-sm">
             <p class="text-sm text-slate-400">Click a node or edge</p>
@@ -615,6 +634,7 @@
                 </div>
                 <div class="p-4 space-y-3">
                   <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fact.description"></p>
+                  <p x-show="fact.audit" class="text-xs text-sky-700" x-text="`证据状态：${fact.audit?.review_status || 'unverified'}`"></p>
                   <div class="text-xs text-slate-400 space-y-1.5">
                     <template x-if="fact.id === 'origin'">
                       <p>Project starting point</p>
@@ -646,6 +666,19 @@
             </div>
             <div class="p-4 space-y-4">
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="selectedFactRecord().description"></p>
+              <template x-if="selectedFactRecord().audit">
+                <div class="text-xs space-y-2 break-words">
+                  <p class="font-semibold text-sky-700" x-text="`证据状态：${selectedFactRecord().audit.review_status}`"></p>
+                  <p x-show="selectedFactRecord().audit.review_notes" x-text="selectedFactRecord().audit.review_notes"></p>
+                  <template x-for="reference in selectedFactRecord().audit.evidence" :key="`${reference.path}:${reference.start_line}`">
+                    <p class="font-mono" x-text="`${reference.path}:${reference.start_line || ''}${reference.end_line ? '-' + reference.end_line : ''}`"></p>
+                  </template>
+                  <template x-for="condition in selectedFactRecord().audit.conditions" :key="condition">
+                    <p x-text="`必要条件：${condition}`"></p>
+                  </template>
+                  <p x-show="selectedFactRecord().audit.premise_ids.length" x-text="`逻辑前提：${selectedFactRecord().audit.premise_ids.join(', ')}`"></p>
+                </div>
+              </template>
               <div class="space-y-3 text-xs">
                 <template x-if="selectedFactId() === 'origin'">
                   <div class="pt-4 border-t border-slate-100">
@@ -1075,6 +1108,8 @@ function cairnApp() {
     view: 'list',
     projects: [],
     project: null,
+    auditRequests: [],
+    auditLoadError: '',
     selectedProjectId: '',
     polling: true,
     pollTimer: null,
@@ -1267,8 +1302,34 @@ function cairnApp() {
         active: 'bg-teal-50 text-teal-600',
         stopped: 'bg-amber-50 text-amber-700',
         completed: 'bg-slate-100 text-slate-500',
+        draining: 'bg-sky-50 text-sky-700',
+        budget_exhausted: 'bg-amber-50 text-amber-700',
       };
       return classes[status] || 'bg-slate-100 text-slate-500';
+    },
+
+    auditPhaseLabel(project = this.project?.project) {
+      if (!project?.audit) return '';
+      if (['completed', 'budget_exhausted'].includes(project.status) || project.audit.phase === 'closed') return '已结束';
+      if (project.status === 'stopped' && project.audit.phase !== 'preparing') return '已停止';
+      if (project.audit.completion_pending) return '待独立验收';
+      return { preparing: '准备中', researching: '研究中', draining: '在途收尾', finalizing: '最终验收', closed: '已结束' }[project.audit.phase] || project.audit.phase;
+    },
+
+    canToggleProject(project) {
+      if (!project || project.audit?.phase === 'preparing') return false;
+      if (['active', 'draining'].includes(project.status)) return true;
+      if (project.status !== 'stopped') return false;
+      return !project.audit || (project.audit.phase === 'researching' && Date.parse(project.audit.research_deadline) > Date.now());
+    },
+
+    canReopenProject(project) {
+      return project?.status === 'completed' && project.mode !== 'audit';
+    },
+
+    completionResultLabel(result, target = {}) {
+      const prefix = target.id && target.id !== this.selectedProjectId ? `${target.id}: ` : '';
+      return prefix + (result.status ? `完成申请：${result.status}` : 'Project completed');
     },
 
     reasonBadgeText(reason, compact = false) {
@@ -1309,7 +1370,7 @@ function cairnApp() {
     },
 
     projectIsActive() {
-      return !this.replay.active && this.project?.project?.status === 'active';
+      return !this.replay.active && this.project?.project?.status === 'active' && !this.project.project.audit?.completion_pending;
     },
 
     countProjectsByStatus(status) {
@@ -1321,7 +1382,7 @@ function cairnApp() {
     },
 
     projectCanWriteHints() {
-      return !this.replay.active && ['active', 'stopped', 'completed'].includes(this.project?.project?.status);
+      return !this.replay.active && ['active', 'stopped', 'completed', 'draining', 'budget_exhausted'].includes(this.project?.project?.status);
     },
 
     canActOnSelectedFacts() {
@@ -1585,12 +1646,26 @@ function cairnApp() {
     },
 
     async loadProject(id) {
-      try { this.project = await this.api('GET', `/projects/${id}`); } catch(e) { this.showToast(e.message, 'error'); }
+      try {
+        const project = await this.api('GET', `/projects/${id}`);
+        if (this.selectedProjectId && this.selectedProjectId !== id) return;
+        this.project = project;
+        this.auditRequests = [];
+        this.auditLoadError = '';
+        if (project.project.mode === 'audit') {
+          try {
+            const requests = await this.api('GET', `/projects/${id}/audit/completions`);
+            if (this.project?.project?.id === id) this.auditRequests = requests;
+          } catch(e) {
+            if (this.project?.project?.id === id) this.auditLoadError = `申请读取失败：${e.message}`;
+          }
+        }
+      } catch(e) { this.showToast(e.message, 'error'); }
     },
 
     async toggleProjectStop() {
-      if (!this.selectedProjectId || !this.project || this.project.project.status === 'completed') return;
-      const nextStatus = this.project.project.status === 'active' ? 'stopped' : 'active';
+      if (!this.selectedProjectId || !this.canToggleProject(this.project?.project)) return;
+      const nextStatus = this.project.project.status === 'stopped' ? 'active' : 'stopped';
       try {
         await this.setProjectStatus(this.selectedProjectId, nextStatus);
       } catch (e) {
@@ -1599,8 +1674,9 @@ function cairnApp() {
     },
 
     async toggleProjectStopById(projectId, currentStatus) {
-      if (!projectId || currentStatus === 'completed') return;
-      const nextStatus = currentStatus === 'active' ? 'stopped' : 'active';
+      const project = this.projects.find(item => item.id === projectId);
+      if (!projectId || !this.canToggleProject(project)) return;
+      const nextStatus = currentStatus === 'stopped' ? 'active' : 'stopped';
       try {
         await this.setProjectStatus(projectId, nextStatus);
       } catch (e) {
@@ -3355,14 +3431,22 @@ function cairnApp() {
     },
 
     async completeProject() {
+      const projectId = this.selectedProjectId;
+      if (!projectId || this.project?.project?.id !== projectId) return;
+      const target = { id: projectId, mode: this.project.project.mode || 'generic' };
+      const form = this.completeForm;
+      const from = [...this.selectedFacts];
+      const description = form.description;
       try {
         const actor = this.actorName();
-        await this.api('POST', `/projects/${this.selectedProjectId}/complete`, { from: this.selectedFacts, description: this.completeForm.description, worker: actor });
-        this.showCompleteModal = false;
+        const result = await this.api('POST', `/projects/${projectId}/complete`, { from, description, worker: actor });
+        if (this.selectedProjectId === projectId && this.completeForm === form) this.showCompleteModal = false;
         await this.loadProjects();
-        await this.loadProject(this.selectedProjectId);
-        this.updateGraph();
-        this.showToast('Project completed');
+        if (this.selectedProjectId === projectId) {
+          await this.loadProject(projectId);
+          if (this.selectedProjectId === projectId) this.updateGraph();
+        }
+        this.showToast(this.completionResultLabel(result, target));
       } catch(e) { this.showToast(e.message, 'error'); }
     },
 

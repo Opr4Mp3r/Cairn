@@ -194,6 +194,20 @@ uv run --project cairn cairn dispatch --config dispatch.yaml
 
 Local mode is selected by `runtime.execution: local` (see `dispatch.local.example.yaml`). On startup the dispatcher checks each configured worker CLI is installed and runnable, and reminds you they must already be logged in. Each project gets an isolated working directory under `local.workspace_root` (default: the dispatcher's current directory). Run the dispatcher directly on the host — not inside Docker — since the agents run with your user's permissions and no sandbox.
 
+### Local code audit MVP
+
+The audit controller shares Cairn's worker drivers and runs alongside the Server and Dispatcher. The example uses only an already-configured local Claude Code CLI:
+
+```bash
+./scripts/run-audit-local.sh --config dispatch.audit.example.yaml \
+  --repo cairn/tests/fixtures/audit-target \
+  --reference cairn/tests/fixtures/audit-target/SECURITY.md \
+  --goal "核对默认匿名调用 /public 与 /admin 的实际源码行为，记录证据和条件；这是合成夹具，不夸大为高危或 RCE。" \
+  --port 0
+```
+
+The launcher prints the local UI URL and run directory, uses a fresh local database, and stops its own processes when the audit finishes or is interrupted. `completed` requires independent approval; `budget_exhausted` preserves partial results without declaring the goal achieved. See [the local audit guide](docs/audit-local.md) for configuration, saved evidence, and recovery.
+
 ### Tests
 
 Run the fast regression suite without Docker or live model endpoints:

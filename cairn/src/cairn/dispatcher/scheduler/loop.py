@@ -64,8 +64,28 @@ class DispatcherLoop:
         self.project_cursor = 0
         self._settings_checked = False
         self._startup_healthchecks_checked = False
+        self._task_cancellations: set[TaskCancellation] = set()
+        self._stopping = False
+
+    def _new_cancellation(self) -> TaskCancellation:
+        cancellation = TaskCancellation()
+        self.__dict__.setdefault("_task_cancellations", set()).add(cancellation)
+        if getattr(self, "_stopping", False):
+            cancellation.cancel("dispatcher shutting down")
+        return cancellation
+
+    def cancel_running_tasks(self, reason: str) -> None:
+        self._stopping = True
+        cancellations = set(getattr(self, "_task_cancellations", ()))
+        cancellations.update(task.cancellation for task in self.futures.values())
+        if cancellations:
+            # 各进程的 TERM 宽限并发等待，不按任务数累积阻塞启动器。
+            with ThreadPoolExecutor(max_workers=len(cancellations)) as executor:
+                list(executor.map(lambda cancellation: cancellation.cancel(reason), cancellations))
 
     def close(self) -> None:
+        if getattr(self, "_stopping", False):
+            self.cancel_running_tasks("dispatcher shutting down")
         if self.futures:
             LOG.info(
                 "dispatcher shutting down waiting_for_tasks=%s running_projects=%s",
@@ -413,7 +433,7 @@ class DispatcherLoop:
                 project,
                 export_yaml,
                 worker,
-                cancellation := TaskCancellation(),
+                cancellation := self._new_cancellation(),
             )
         except Exception:
             LOG.exception("failed to submit reason task project=%s worker=%s", project.project.id, worker.name)
@@ -483,7 +503,7 @@ class DispatcherLoop:
                 project,
                 intent,
                 worker,
-                cancellation := TaskCancellation(),
+                cancellation := self._new_cancellation(),
             )
         except Exception:
             LOG.exception("failed to submit bootstrap task project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
@@ -544,7 +564,7 @@ class DispatcherLoop:
                 export_yaml,
                 intent,
                 worker,
-                cancellation := TaskCancellation(),
+                cancellation := self._new_cancellation(),
             )
         except Exception:
             LOG.exception("failed to submit explore task project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
@@ -735,6 +755,7 @@ class DispatcherLoop:
         done = [future for future in self.futures if future.done()]
         for future in done:
             task = self.futures.pop(future)
+            getattr(self, "_task_cancellations", set()).discard(task.cancellation)
             try:
                 outcome = future.result()
                 if outcome == "cancelled":
