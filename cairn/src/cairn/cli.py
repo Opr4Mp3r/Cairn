@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import signal
 import uuid
@@ -146,6 +147,65 @@ def audit_probe(config_path: Path, target_file: Path, role: str, output_dir: Pat
             raise click.ClickException(result.error or result.status)
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+@main.command("kritt-probe")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--target", "target_name", required=True, help="Configured Kritt target key")
+@click.option("--goal", required=True)
+@click.option("--scan", "scan_id", type=click.IntRange(min=1))
+@click.option("--view", "view_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Explicit offline fixture; otherwise read PostgreSQL")
+@click.option("--output", type=click.Path(file_okay=False, path_type=Path), required=True)
+def kritt_probe(config_path: Path, target_name: str, goal: str, scan_id: int | None,
+                view_path: Path | None, output: Path):
+    """只读取材及源码探针；不创建 Cairn 项目。"""
+    from cairn.controller.kritt_probe import run_kritt_probe
+    from cairn.controller.local import stop_agent_groups
+    from cairn.dispatcher.config import DispatchConfig
+    from cairn.dispatcher.runtime.cancellation import TaskCancellation
+    from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
+
+    cancellation = TaskCancellation()
+    original_registry = os.environ.get(REGISTRY_ENV)
+    registry = output.expanduser().resolve() / "agent-processes"
+    os.environ[REGISTRY_ENV] = str(registry)
+
+    cleaning = interrupted = False
+
+    def terminate(_signum, _frame):
+        nonlocal interrupted
+        if interrupted:
+            return
+        interrupted = True
+        if cleaning:
+            return
+        # Unwind lock-holding code first; normal exception handling performs cancellation.
+        raise KeyboardInterrupt("kritt-probe interrupted")
+
+    previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        summary = run_kritt_probe(DispatchConfig.load(config_path), target_name=target_name,
+                                  user_goal=goal, output=output, scan_id=scan_id, view_path=view_path,
+                                  cancellation=cancellation)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        cleaning = True
+        try:
+            cancellation.cancel("kritt-probe shutdown")
+            stop_agent_groups(registry, {os.getpid()})
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise click.ClickException(f"kritt-probe cleanup failed: {exc}; registry: {registry}") from exc
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+            if original_registry is None:
+                os.environ.pop(REGISTRY_ENV, None)
+            else:
+                os.environ[REGISTRY_ENV] = original_registry
+    if interrupted:
+        raise click.Abort()
+    click.echo(json.dumps({key: summary[key] for key in ("status", "scan_id", "commit_sha", "calls", "queries", "output")}, ensure_ascii=False))
 
 
 @main.command("audit")

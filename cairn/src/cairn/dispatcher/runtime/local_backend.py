@@ -46,7 +46,8 @@ class LocalBackend:
         timeout_seconds: int | None = None,
         kill_after_seconds: int = 5,
     ) -> LocalProcess:
-        merged_env = {**os.environ, **(env or {})}
+        merged_env = {key: value for key, value in {**os.environ, **(env or {})}.items()
+                      if key not in self._config.excluded_env}
         return LocalProcess(
             command,
             cwd=container_name,

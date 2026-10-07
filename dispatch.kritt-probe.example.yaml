@@ -1,0 +1,50 @@
+# B-CP1：只读取材和源码探针；不创建项目或启动研究。
+server: "http://127.0.0.1:8000"
+runtime:
+  execution: local
+  worker_healthcheck: disabled
+  max_workers: 1
+  max_running_projects: 1
+  max_project_workers: 1
+  interval: 3
+  healthcheck_timeout: 15
+  prompt_group: default
+tasks:
+  bootstrap:
+    timeout: 120
+    conclude_timeout: 30
+  reason:
+    timeout: 60
+  explore:
+    timeout: 180
+    conclude_timeout: 30
+workers:
+  - name: claude-main
+    type: claudecode
+    task_types: [bootstrap, reason, explore]
+    max_running: 1
+    priority: 0
+controller:
+  roles:
+    builder: claude-main
+    reviewer: claude-main
+  timeouts:
+    build: 180
+  kritt:
+    dsn_env: CAIRN_KRITT_READONLY_DSN
+    profile: kritt_v1
+    max_rows: 20000
+    max_bytes: 33554432
+    statement_timeout_ms: 10000
+    response_rows: 20
+    response_bytes: 65536
+    max_queries: 12
+    max_agent_calls: 8
+    probe_seconds: 600
+    targets:
+      zentao:
+        repo_full: easysoft/zentaopms
+        scan_id: 19
+        commit: d5bfff8c91cea48018275381e0a127ed6fa5c79f
+        source_root: ./target-source/zentao
+        source_manifest: ./target-source/zentao-manifest.json

@@ -160,6 +160,7 @@ class ContainerConfig(BaseModel):
 class LocalConfig(BaseModel):
     workspace_root: str | None = None
     completed_action: LocalCompletedAction = "keep"
+    excluded_env: list[str] = Field(default_factory=list)
 
 
 class RuntimeConfig(BaseModel):
@@ -236,6 +237,32 @@ class ControllerBudgetConfig(BaseModel):
     final_review_seconds: int = Field(default=360, gt=0)
 
 
+class KrittTargetConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repo_full: str = Field(min_length=1)
+    source_root: str = Field(min_length=1)
+    source_manifest: str = Field(min_length=1)
+    scan_id: int | None = Field(default=None, gt=0)
+    commit: str | None = None
+
+
+class KrittConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dsn_env: str = Field(default="CAIRN_KRITT_READONLY_DSN", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    profile: Literal["kritt_v1"] = "kritt_v1"
+    targets: dict[str, KrittTargetConfig] = Field(min_length=1)
+    max_rows: int = Field(default=20000, gt=0)
+    max_bytes: int = Field(default=33554432, gt=0)
+    statement_timeout_ms: int = Field(default=10000, gt=0)
+    response_rows: int = Field(default=20, gt=0, le=100)
+    response_bytes: int = Field(default=65536, ge=4096, le=1048576)
+    max_queries: int = Field(default=12, gt=0)
+    max_agent_calls: int = Field(default=8, gt=0)
+    probe_seconds: int = Field(default=600, gt=0)
+
+
 class ControllerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -246,6 +273,7 @@ class ControllerConfig(BaseModel):
     timeouts: ControllerTimeouts = Field(default_factory=ControllerTimeouts)
     review: ControllerReviewConfig = Field(default_factory=ControllerReviewConfig)
     budget: ControllerBudgetConfig = Field(default_factory=ControllerBudgetConfig)
+    kritt: KrittConfig | None = None
 
 
 class DispatchConfig(BaseModel):
@@ -322,12 +350,22 @@ class DispatchConfig(BaseModel):
         else:  # local: workers reuse the host CLI config, so no LLM env keys are required
             if self.local is None:
                 self.local = LocalConfig()
+            if self.controller is not None and self.controller.kritt is not None:
+                secret_env = self.controller.kritt.dsn_env
+                self.local.excluded_env = list(dict.fromkeys([*self.local.excluded_env, secret_env]))
         return self
 
     @classmethod
     def load(cls, path: Path) -> "DispatchConfig":
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         config = cls.model_validate(data)
+        if config.controller is not None and config.controller.kritt is not None:
+            for target in config.controller.kritt.targets.values():
+                for field in ("source_root", "source_manifest"):
+                    value = Path(getattr(target, field)).expanduser()
+                    if not value.is_absolute():
+                        value = path.resolve().parent / value
+                    setattr(target, field, str(value.resolve()))
         validate_prompt_resources(config.runtime.prompt_group)
         if config.controller is not None and config.controller.research_prompt_group is not None:
             validate_prompt_resources(config.controller.research_prompt_group)
