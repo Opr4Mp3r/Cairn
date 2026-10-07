@@ -201,7 +201,7 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 | 入口或文档 | 当前用途 |
 |---|---|
 | [Kritt 取材探针](docs/kritt-probe.md) | B-CP1 已完成，只读查询与源码观察，不创建研究项目 |
-| [Builder 方案生成](docs/builder-prepare.md) | B-CP2 当前开发入口，只生成方案；完整启动和结果交付按上述开发约定继续实现 |
+| [Builder 研究入口](docs/builder-prepare.md) | 生成方案，导入普通项目并启动研究；结果展示和最终交付按后续分段继续实现 |
 | [本地 audit 模式](docs/audit-local.md) | 已完成的独立审计控制器路径，包含复核、终审及预算；这些流程不作为新 Kritt 路径的开发要求 |
 
 ### Local code audit MVP（已完成的 audit 路径）

@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 import requests
 from requests.adapters import HTTPAdapter
 
-from cairn.server.models import (AuditCompletion, AuditDetail, AuditRecordRequest, ClosingReviewRequest, CompletionClaimRequest,
+from cairn.server.models import (AuditCompletion, AuditDetail, AuditRecordRequest, ClosingReviewRequest, CompletionClaimRequest, CreateProjectRequest,
                                 CompletionReviewRequest, CreateAuditRequest, Intent, ProjectDetail, ProjectSummary, Settings)
 
 LOG = logging.getLogger(__name__)
@@ -34,9 +34,10 @@ class ApiResult:
 
 
 class CairnClient:
-    def __init__(self, base_url: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, timeout: float = 10.0, *, trust_env: bool = True):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._trust_env = trust_env
         self._summary_adapter = TypeAdapter(list[ProjectSummary])
         self._local = threading.local()
         self._sessions: dict[int, requests.Session] = {}
@@ -66,6 +67,9 @@ class CairnClient:
 
     def create_audit(self, request: CreateAuditRequest) -> ApiResult:
         return self._request_json("POST", "/audits", request.model_dump(mode="json", by_alias=True))
+
+    def create_project(self, request: CreateProjectRequest) -> ApiResult:
+        return self._request_json("POST", "/projects", request.model_dump(mode="json"))
 
     def start_audit(self, project_id: str) -> ApiResult:
         return self._request_json("POST", f"/projects/{project_id}/audit/start", {})
@@ -209,6 +213,7 @@ class CairnClient:
             return session
 
         session = requests.Session()
+        session.trust_env = self._trust_env
         adapter = HTTPAdapter(pool_connections=64, pool_maxsize=64, pool_block=False)
         session.mount("http://", adapter)
         session.mount("https://", adapter)

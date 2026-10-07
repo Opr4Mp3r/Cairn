@@ -1,0 +1,126 @@
+import json
+import os
+from pathlib import Path
+import sqlite3
+import threading
+
+from click.testing import CliRunner
+from fastapi.testclient import TestClient
+import pytest
+
+from cairn.cli import main
+from cairn.controller.research import import_plan, run_research
+from cairn.dispatcher.config import LocalConfig
+from cairn.dispatcher.protocol.client import ApiResult, CairnClient
+from cairn.dispatcher.runtime.local_backend import LocalBackend
+from cairn.server import db
+from cairn.server.app import app
+from test_builder import prepared
+from test_kritt_probe import probe
+
+
+def test_import_uses_generic_interfaces_and_maps_seed_ids(tmp_path, monkeypatch):
+    repo = tmp_path / "source"
+    repo.mkdir()
+    (repo / "app.py").write_text("def entry(): return 'ok'\n")
+    run = tmp_path / "run"
+    run.mkdir()
+    plan = {"title": "研究", "origin": "已有材料", "goal": "沿输入研究",
+            "seeds": [{"key": "entry", "description": "入口材料"}, {"key": "flow", "description": "流程材料"}],
+            "intents": [{"from": ["flow", "entry"], "description": "继续读取源码"}], "hints": ["保留条件"]}
+    (run / "plan.json").write_text(json.dumps(plan))
+    (run / "selected-materials.json").write_text('[{"condition":"未安装"}]')
+    ready = {"run_dir": str(run), "source_root": str(repo), "plan": str(run / "plan.json"),
+             "materials": str(run / "selected-materials.json"), "repo_full": "example/project",
+             "scan_id": 19, "commit_sha": "a" * 40, "user_goal": "用户原始需求"}
+    monkeypatch.setattr(db, "_db_path", None)
+    db.configure(tmp_path / "cairn.db")
+    with TestClient(app) as http:
+        client = CairnClient("http://testserver")
+
+        def request(method, path, json):
+            response = http.request(method, path, json=json)
+            return ApiResult(response.status_code, response.json(), response.text)
+
+        monkeypatch.setattr(client, "_request_json", request)
+        result = import_plan(client, LocalBackend(LocalConfig(workspace_root=str(run / "work"))), ready)
+        project = http.get(f"/projects/{result['project_id']}").json()
+    assert project["project"].get("mode", "generic") == "generic" and not project["project"]["bootstrap_enabled"]
+    assert project["project"]["status"] == "active" and "audit" not in project["project"]
+    assert result["seed_ids"] == {"entry": "f001", "flow": "f002"}
+    imports = [i for i in project["intents"] if i["creator"] == "builder-import"]
+    assert [i["to"] for i in imports] == ["f001", "f002"]
+    research = next(i for i in project["intents"] if i["id"] == result["intent_ids"][0])
+    assert research["from"] == ["f002", "f001"] and research["worker"] is None and research["to"] is None
+    workspace = Path(result["workspace"])
+    assert (workspace / "repo").resolve() == repo
+    assert json.loads((workspace / "kritt-materials.json").read_text())[0]["condition"] == "未安装"
+    assert json.loads((workspace / "research-context.json").read_text())["user_goal"] == ready["user_goal"]
+    assert "repo/" in project["hints"][0]["content"]
+
+
+def test_builder_cli_starts_dispatcher_after_import_and_writes_new_fact(prepared, monkeypatch):
+    config, path, view, run = prepared
+    config.server = "http://127.0.0.1:0"
+    config.runtime.interval = 1
+    config.runtime.worker_healthcheck = "disabled"
+    config.tasks.reason.timeout = 10
+    config.tasks.explore.timeout = 15
+    path.write_text(json.dumps(config.model_dump(mode="json")))
+    binary = path.parent / "bin" / "claude"
+    calls = path.parent / "research-calls.jsonl"
+    monkeypatch.setenv("RESEARCH_TEST_CALLS", str(calls))
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
+
+    def bounded_research(*args, **kwargs):
+        timer = threading.Timer(25, kwargs["cancellation"].cancel, args=("test deadline",))
+        timer.start()
+        try:
+            return run_research(*args, **kwargs)
+        finally:
+            timer.cancel()
+            timer.join()
+
+    monkeypatch.setattr("cairn.controller.research.run_research", bounded_research)
+    prefix = r'''
+import json, os, pathlib, re, sys
+prompt = sys.argv[-1]
+if '"output_schema"' not in prompt:
+    import yaml
+    assert "CAIRN_KRITT_READONLY_DSN" not in os.environ
+    graph_path = re.search(r"/tmp/cairn-prompts/[^\s]+/graph.yaml", prompt).group()
+    graph = yaml.safe_load(pathlib.Path(graph_path).read_text())
+    assert graph["project"].get("mode", "generic") == "generic"
+    assert any(i["creator"] == "builder-import" and i["to"] is not None for i in graph["intents"])
+    observed = [f for f in graph["facts"] if f["description"].startswith("新探索读取：")]
+    reason = "You need to judge two things:" in prompt
+    if reason:
+        data = {"complete": {"from": [observed[0]["id"]], "description": "完成源码读取"}} if observed else {}
+    else:
+        source = pathlib.Path("repo/module/install/control.php").read_text()
+        materials = json.loads(pathlib.Path("kritt-materials.json").read_text())
+        assert materials and source
+        data = {"description": "新探索读取：" + source[:80]}
+    with pathlib.Path(os.environ["RESEARCH_TEST_CALLS"]).open("a") as f:
+        f.write(json.dumps({"phase": "reason" if reason else "explore", "pid": os.getpid(), "cwd": os.getcwd()}) + "\n")
+    print(json.dumps({"accepted": True, "data": data}))
+    raise SystemExit
+'''
+    original = binary.read_text()
+    binary.write_text(original.split("\n", 1)[0] + "\n" + prefix + original.split("\n", 1)[1])
+    result = CliRunner().invoke(main, ["builder", "--config", str(path), "--target", "test", "--goal", "读取源码",
+                                      "--view", str(view), "--run-dir", str(run)])
+    assert result.exit_code == 0, result.output + "\n" + "\n".join(p.read_text() for p in run.glob("*.log"))
+    summary = json.loads((run / "research.json").read_text())
+    locator = json.loads((run / "project.json").read_text())
+    assert summary["status"] == "completed" and summary["project_id"] == locator["project_id"]
+    assert set(summary["processes"]) == {"server", "dispatcher"}
+    with sqlite3.connect(run / "cairn.db") as sql:
+        facts = sql.execute("SELECT id, description FROM facts WHERE project_id = ?", (summary["project_id"],)).fetchall()
+        assert any(description.startswith("新探索读取：") and fid not in locator["seed_ids"].values() for fid, description in facts)
+        assert sql.execute("SELECT mode FROM projects").fetchone()[0] == "generic"
+    executed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert any(record["phase"] == "explore" for record in executed)
+    for pid in [row["pid"] for row in executed] + [row["pid"] for row in summary["processes"].values()]:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)

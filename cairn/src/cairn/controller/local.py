@@ -105,6 +105,42 @@ def stop_processes(processes: dict[str, subprocess.Popen], registry: Path | None
         raise RuntimeError("; ".join(errors))
 
 
+def start_server(config: DispatchConfig, run_dir: Path, spawn, *, port: int | None = None,
+                 check_interrupted=lambda: None) -> Path:
+    """Start an owned loopback Server before any Dispatcher is launched."""
+    address = urlparse(config.server)
+    if address.scheme != "http" or address.hostname not in ("127.0.0.1", "localhost") or address.path not in ("", "/"):
+        raise ValueError("local launcher requires a loopback HTTP server URL")
+    # 将已绑定 socket 交给 Uvicorn；端口冲突即失败，不把已有服务误当成本次 Server。
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", port if port is not None else (address.port if address.port is not None else 8000)))
+        listener.listen()
+        actual_port = listener.getsockname()[1]
+        config.server = f"http://127.0.0.1:{actual_port}"
+        config.local.workspace_root = str(run_dir / "work")
+        effective_config = run_dir / "config.yaml"
+        effective_config.write_text(yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True), encoding="utf-8")
+        server = spawn("server", ["serve", "--host", "127.0.0.1", "--port", str(actual_port),
+                        "--fd", str(listener.fileno()), "--db-path", str(run_dir / "cairn.db"), "--no-access-log"],
+                       pass_fds=(listener.fileno(),))
+        deadline = time.monotonic() + 20
+        with requests.Session() as http:
+            http.trust_env = False
+            while True:
+                check_interrupted()
+                if server.poll() is not None:
+                    raise RuntimeError("Server exited; see server.log")
+                try:
+                    if http.get(config.server + "/settings", timeout=0.5).ok:
+                        break
+                except requests.RequestException:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Server readiness timed out; see server.log")
+                time.sleep(0.1)
+    return effective_config
+
+
 def run_local(config_path: Path, repo: Path, goal: str, run_dir: Path,
               references: tuple[Path, ...] = (), port: int | None = None) -> dict:
     config = DispatchConfig.load(config_path)
@@ -154,36 +190,13 @@ def run_local(config_path: Path, repo: Path, goal: str, run_dir: Path,
 
     previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
-        # 将已绑定 socket 交给 Uvicorn；端口冲突即失败，不把已有服务误当成本次 Server。
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", port if port is not None else address.port or 8000))
-            listener.listen()
-            actual_port = listener.getsockname()[1]
-            config.server = f"http://127.0.0.1:{actual_port}"
-            config.local.workspace_root = str(run_dir / "work")
-            effective_config = run_dir / "config.yaml"
-            effective_config.write_text(yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True), encoding="utf-8")
-            summary["server"] = config.server
-            summary["config"] = str(effective_config)
-            server = spawn("server", ["serve", "--host", "127.0.0.1", "--port", str(actual_port),
-                            "--fd", str(listener.fileno()), "--db-path", str(run_dir / "cairn.db"), "--no-access-log"],
-                           pass_fds=(listener.fileno(),))
-            deadline = time.monotonic() + 20
-            with requests.Session() as http:
-                http.trust_env = False
-                while True:
-                    if interrupted:
-                        raise KeyboardInterrupt("local audit interrupted")
-                    if server.poll() is not None:
-                        raise RuntimeError("Server exited; see server.log")
-                    try:
-                        if http.get(config.server + "/settings", timeout=0.5).ok:
-                            break
-                    except requests.RequestException:
-                        pass
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("Server readiness timed out; see server.log")
-                    time.sleep(0.1)
+        def check_interrupted():
+            if interrupted:
+                raise KeyboardInterrupt("local audit interrupted")
+
+        effective_config = start_server(config, run_dir, spawn, port=port, check_interrupted=check_interrupted)
+        server = processes["server"]
+        summary.update(server=config.server, config=str(effective_config))
         dispatcher = spawn("dispatcher", ["dispatch", "--config", str(effective_config)])
         args = ["audit", "--config", str(effective_config), "--repo", str(repo), "--goal", goal]
         for reference in references:

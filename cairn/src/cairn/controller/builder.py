@@ -174,12 +174,14 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
         messages = [{"role": "user", "content": user_goal.strip()}]
         last = described
         references = _references(target)
+        materials_path = folder / "selected-materials.json"
         while True:
             calls += 1
             context = {"user_goal": user_goal.strip(), "messages": messages, "repo_path": str(repo),
                        "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
                        "view_digest": view.digest, "references": references, "description": described,
                        "last_tool_result": last, "fields": {key: list(value) for key, value in FIELDS.items()},
+                       "materials_path": str(materials_path) if materials_path.exists() else None,
                        "mechanisms": {key: list(value) for key, value in MECHANISMS.items()},
                        "output_schema": BuilderAction.model_json_schema()}
             action = _turn(config, backend, folder, calls, instruction, context, cancellation)
@@ -202,6 +204,8 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
                     if not isinstance(query, GetAction) or cursor is None:
                         break
                     query = query.model_copy(update={"cursor": cursor})
+                if isinstance(query, GetAction):
+                    _write(materials_path, _materials(tools))
                 continue
             plan = action.model_dump(mode="json", by_alias=True)
             plan.pop("action", None)
@@ -211,6 +215,7 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
             tools.save_receipts(folder / "query-receipts.json")
             summary = {"status": "plan_ready", "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
                        "repo_full": target.repo_full, "source_root": str(repo), "run_dir": str(folder),
+                       "target": target_name, "user_goal": user_goal.strip(),
                        "plan": str(folder / "plan.json"), "materials": str(folder / "selected-materials.json"),
                        "calls": calls, "queries": queries, "seeds": len(action.seeds), "intents": len(action.intents)}
             _write(folder / "run.json", summary)

@@ -217,8 +217,9 @@ def kritt_probe(config_path: Path, target_name: str, goal: str, scan_id: int | N
 @click.option("--run-dir", type=click.Path(file_okay=False, path_type=Path), required=True)
 @click.option("--view", "view_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Explicit offline fixture; otherwise read PostgreSQL")
 def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
-    """从自然语言需求查询 Kritt 并生成研究方案。本阶段不创建项目。"""
+    """从自然语言需求查询 Kritt、创建初始图并启动普通研究。"""
     from cairn.controller.builder import run_builder
+    from cairn.controller.research import run_research
     from cairn.controller.local import stop_agent_groups
     from cairn.dispatcher.config import DispatchConfig
     from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -248,8 +249,13 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
 
     previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
-        result = run_builder(DispatchConfig.load(config_path), target_name=target_name, user_goal=goal,
+        config = DispatchConfig.load(config_path)
+        prepared = run_builder(config, target_name=target_name, user_goal=goal,
                              run_dir=folder, scan_id=scan_id, view_path=view_path, ask=reply, cancellation=token)
+        result = run_research(config, prepared, cancellation=token,
+                              report=lambda event: click.echo(json.dumps(
+                                  {key: event[key] for key in ("status", "server", "project_id", "run_dir")},
+                                  ensure_ascii=False)))
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -268,7 +274,7 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
                 os.environ[REGISTRY_ENV] = original_registry
     if interrupted:
         raise click.Abort()
-    click.echo(json.dumps({key: result[key] for key in ("status", "scan_id", "commit_sha", "calls", "queries", "plan")}, ensure_ascii=False))
+    click.echo(json.dumps({key: result[key] for key in ("status", "server", "project_id", "run_dir")}, ensure_ascii=False))
 
 
 @main.command("audit")

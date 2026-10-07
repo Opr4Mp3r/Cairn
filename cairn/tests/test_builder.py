@@ -78,6 +78,18 @@ def test_question_is_answered_in_the_same_process(prepared, monkeypatch):
     assert json.loads((folder / "plan.json").read_text())["seeds"]
 
 
+def test_paginated_materials_are_available_to_the_next_builder_call(prepared):
+    config, _, view, folder = prepared
+    config.controller.kritt.response_rows = 1
+    result = run_builder(config, target_name="test", user_goal="anonymous RCE", run_dir=folder, view_path=view)
+    context = json.loads((folder / "call-003" / "input.json").read_text())
+    materials = json.loads(Path(context["materials_path"]).read_text())
+    assert result["status"] == "plan_ready"
+    assert len(context["last_tool_result"]["records"]) == 1
+    assert len(materials) > 1
+    assert any(record["ref"]["table"] == "workflows.vulnerabilities" for record in materials)
+
+
 def test_unanswered_question_ends_the_run(prepared, monkeypatch):
     monkeypatch.setenv("BUILDER_TEST_MODE", "ask")
     config, _, view, folder = prepared
@@ -105,13 +117,21 @@ def test_invalid_output_ends_after_one_repair(prepared, monkeypatch):
     assert (folder / "call-001-format-repair" / "result.json").exists()
 
 
-def test_cli_uses_the_documented_command(prepared):
+def test_cli_uses_the_documented_command(prepared, monkeypatch):
     config, config_path, view, folder = prepared
+    seen = []
+
+    def research(config, ready, **kwargs):
+        seen.append(ready)
+        return {"status": "completed", "project_id": "proj_001", "run_dir": ready["run_dir"],
+                "server": "http://127.0.0.1:8000"}
+
+    monkeypatch.setattr("cairn.controller.research.run_research", research)
     result = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
                                         "--goal", "anonymous RCE", "--run-dir", str(folder), "--view", str(view)])
     assert result.exit_code == 0, result.output
     summary = json.loads(result.output)
-    assert summary["status"] == "plan_ready" and Path(summary["plan"]).is_file()
+    assert summary["status"] == "completed" and Path(seen[0]["plan"]).is_file()
     rejected = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
                                           "--goal", "anonymous RCE", "--run-dir", str(folder) + "-2",
                                           "--prepare-only"])
