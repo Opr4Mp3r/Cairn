@@ -245,6 +245,7 @@ class KrittTargetConfig(BaseModel):
     source_manifest: str = Field(min_length=1)
     scan_id: int | None = Field(default=None, gt=0)
     commit: str | None = None
+    references: list[str] = Field(default_factory=list)
 
 
 class KrittConfig(BaseModel):
@@ -366,6 +367,8 @@ class DispatchConfig(BaseModel):
                     if not value.is_absolute():
                         value = path.resolve().parent / value
                     setattr(target, field, str(value.resolve()))
+                target.references = [str((value if value.is_absolute() else path.resolve().parent / value).resolve())
+                                     for value in (Path(item).expanduser() for item in target.references)]
         validate_prompt_resources(config.runtime.prompt_group)
         if config.controller is not None and config.controller.research_prompt_group is not None:
             validate_prompt_resources(config.controller.research_prompt_group)

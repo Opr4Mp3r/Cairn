@@ -1,5 +1,7 @@
 # Dispatcher
 
+适用范围：本文描述已有通用Dispatcher机制，主要对应generic项目。Kritt正向MVP直接复用这些能力，当前新增工作以[kritt-builder-mvp.md](kritt-builder-mvp.md)为准。已实现的audit复核/预算扩展见[audit控制器记录](audit-controller-mvp.md)，不作为新Kritt路径的开发任务。
+
 ---
 
 ## 本质
@@ -27,7 +29,7 @@ Agent 不直接认领 Intent，不直接 heartbeat，不直接调用 Cairn API�
 9. 项目切到非 `active` 后，Dispatcher 必须把它视为硬停止：不再派发新任务；对本地仍在运行的 `bootstrap`、`explore`、`reason` 任务立即发出取消；对已取消任务不再进入 conclude fallback；并在后续轮询中停止该项目容器，杀掉容器内仍在运行的 Agent 进程。
 10. 当前实现按“单 Dispatcher 实例”设计和测试；不支持多个 Dispatcher 同时连接同一服务端共同调度。
 11. 若项目曾 `completed` 后又被服务端显式 `reopen` 为 `active`，Dispatcher 不做特殊分支：它会把这视为普通 active 项目继续调度；同时若该项目容器仍处于已排队 cleanup 状态，Dispatcher 会先等待 cleanup 完成，避免与旧的 completed/stopped cleanup 竞态。
-12. 已知限制：当前协议只记录当前 claim 持有者，不保留 Intent 的 worker 历史；因此项目被 `stopped` 后，随着 open intent 的 `worker` 被服务端清空，Dispatcher/UI/API 都无法直接展示“停止前最后是谁在推进这个 intent”。后续若要补这部分可观测性，较合理的方向是在 Intent 上增加类似 `worker_history` 的历史字段，而不是改变当前 claim 语义。
+12. 已知限制：当前协议只记录当前claim持有者，不保留Intent的worker历史；项目stopped后，open intent的worker会清空，因此不能直接展示停止前最后由谁推进。当前Kritt MVP不扩展这类历史记录。
 
 补充：
 

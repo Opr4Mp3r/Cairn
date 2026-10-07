@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 import signal
 import uuid
@@ -206,6 +207,68 @@ def kritt_probe(config_path: Path, target_name: str, goal: str, scan_id: int | N
     if interrupted:
         raise click.Abort()
     click.echo(json.dumps({key: summary[key] for key in ("status", "scan_id", "commit_sha", "calls", "queries", "output")}, ensure_ascii=False))
+
+
+@main.command("builder")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--target", "target_name", required=True)
+@click.option("--goal", required=True)
+@click.option("--scan-id", type=click.IntRange(min=1))
+@click.option("--run-dir", type=click.Path(file_okay=False, path_type=Path), required=True)
+@click.option("--view", "view_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Explicit offline fixture; otherwise read PostgreSQL")
+def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
+    """从自然语言需求查询 Kritt 并生成研究方案。本阶段不创建项目。"""
+    from cairn.controller.builder import run_builder
+    from cairn.controller.local import stop_agent_groups
+    from cairn.dispatcher.config import DispatchConfig
+    from cairn.dispatcher.runtime.cancellation import TaskCancellation
+    from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
+
+    folder = run_dir.expanduser().resolve()
+    token = TaskCancellation()
+    registry = folder / "agent-processes"
+    original_registry = os.environ.get(REGISTRY_ENV)
+    os.environ[REGISTRY_ENV] = str(registry)
+    cleaning = interrupted = False
+
+    def reply(questions: list[str]) -> str:
+        if not sys.stdin.isatty():
+            raise ValueError("需要补充信息后重新运行：" + "；".join(questions))
+        for question in questions:
+            click.echo(question)
+        return click.prompt("请补充", type=str)
+
+    def terminate(_signum, _frame):
+        nonlocal interrupted
+        if interrupted:
+            return
+        interrupted = True
+        if not cleaning:
+            raise KeyboardInterrupt("Builder interrupted")
+
+    previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        result = run_builder(DispatchConfig.load(config_path), target_name=target_name, user_goal=goal,
+                             run_dir=folder, scan_id=scan_id, view_path=view_path, ask=reply, cancellation=token)
+    except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        cleaning = True
+        try:
+            token.cancel("Builder shutdown")
+            stop_agent_groups(registry, {os.getpid()})
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise click.ClickException(f"Builder cleanup failed: {exc}; registry: {registry}") from exc
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+            if original_registry is None:
+                os.environ.pop(REGISTRY_ENV, None)
+            else:
+                os.environ[REGISTRY_ENV] = original_registry
+    if interrupted:
+        raise click.Abort()
+    click.echo(json.dumps({key: result[key] for key in ("status", "scan_id", "commit_sha", "calls", "queries", "plan")}, ensure_ascii=False))
 
 
 @main.command("audit")

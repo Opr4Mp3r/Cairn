@@ -1,5 +1,7 @@
 # Cairn 协作探索协议
 
+适用范围：本文说明已有普通generic项目的图协议与直接Complete行为。Kritt正向MVP复用该协议，剩余开发范围见[kritt-builder-mvp.md](kritt-builder-mvp.md)。已实现的audit专用元数据、完成申请和终审另见[audit控制器记录](audit-controller-mvp.md)，不作为新Kritt路径的前置步骤。
+
 ---
 
 ## 本质
@@ -361,7 +363,7 @@ Body：
 
 当项目切到 `stopped` 时，Server 会立即把所有尚无结论的 Intent 的 `worker` 清空为 `null`，并把 `project.reason` 清空，使这些 claim 立刻失效。这样项目恢复后可以马上重新认领，不必等待超时。`stopped` 的语义是硬停止：Server 负责拒绝后续探索写操作并清空 open intent claim / reason lease；消费者拿到这个信号后应立刻取消本地仍在运行的任务，并停止对应项目容器。
 
-已知问题：当前协议里，Intent 级只保存“当前 claim 持有者”这一份信息，也就是 `intent.worker`。因此项目一旦被切到 `stopped`，这些 open intent 的 `worker` 会被立即清空；停止后从项目详情里将无法直接看出“该 intent 在停止前最后是由哪个 worker 在推进”。后续可以考虑增加类似 `worker_history` 的 Intent 级历史字段来保留这部分可见性，但当前版本尚未实现。
+已知限制：Intent只保存当前claim持有者`intent.worker`。项目切到stopped后，open intent的worker会被清空，详情无法显示停止前最后由谁推进。当前Kritt MVP不新增worker历史字段或对应展示模块。
 
 Body：
 

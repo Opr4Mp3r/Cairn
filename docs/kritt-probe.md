@@ -1,6 +1,6 @@
 # B-CP1：Kritt 只读取材探针
 
-此入口验证 PostgreSQL → Kritt 材料 → 同版本源码 → 结构化观察。它复用 Cairn 的 WorkerDriver 和执行器，默认使用 claudecode；运行不会创建项目，不需要启动 Cairn Server/Dispatcher。正式需求对话、Goal固定和建图在后续检查点实现。
+此入口验证 PostgreSQL → Kritt 材料 → 同版本源码 → 结构化观察。它复用 Cairn 的 WorkerDriver 和执行器，默认使用 claudecode；运行不会创建项目，不需要启动 Cairn Server/Dispatcher。B-CP1已完成，提交为`1517a31`；后续需求对话、方案生成及项目启动按[正向MVP计划](specs/kritt-builder-mvp.md)推进。
 
 ## 准备
 
@@ -41,4 +41,4 @@ uv run --project cairn cairn kritt-probe \
 
 成功会核对引用身份、源码文件hash、行号与完整行引文；观察仍是 unverified。它不证明漏洞、匿名可达性、默认部署或Goal达成。Kritt的rank/canonical/valid/scope是分析标签；执行失败、stub与无finding均不等于安全结论。
 
-只读DSN会从Agent子进程环境过滤。真实产物和调用原文可能包含目标资料，保存在本地验收目录，不提交Git。B-CP1完成后停止，由用户检查后决定是否提交及进入下一检查点。
+只读DSN会从Agent子进程环境过滤。真实产物和调用原文可能包含目标资料，保存在本地运行目录，不提交Git。本文保留已实现探针的用法；后续方案生成见[Builder准备入口](builder-prepare.md)，不增加独立预审或种子复核。

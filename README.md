@@ -194,7 +194,19 @@ uv run --project cairn cairn dispatch --config dispatch.yaml
 
 Local mode is selected by `runtime.execution: local` (see `dispatch.local.example.yaml`). On startup the dispatcher checks each configured worker CLI is installed and runnable, and reminds you they must already be logged in. Each project gets an isolated working directory under `local.workspace_root` (default: the dispatcher's current directory). Run the dispatcher directly on the host — not inside Docker — since the agents run with your user's permissions and no sandbox.
 
-### Local code audit MVP
+### Kritt 与本地审计入口
+
+当前 Kritt 集成按[正向 MVP 开发约定](docs/specs/kritt-builder-mvp.md)推进：用户需求 → 读取 Kritt → 生成方案 → 普通 Cairn 项目 → 研究输出。后续新增工作集中在初始图导入、启动衔接和结果展示，直接复用现有 Server、Dispatcher、harness 与图页面。
+
+| 入口或文档 | 当前用途 |
+|---|---|
+| [Kritt 取材探针](docs/kritt-probe.md) | B-CP1 已完成，只读查询与源码观察，不创建研究项目 |
+| [Builder 方案生成](docs/builder-prepare.md) | B-CP2 当前开发入口，只生成方案；完整启动和结果交付按上述开发约定继续实现 |
+| [本地 audit 模式](docs/audit-local.md) | 已完成的独立审计控制器路径，包含复核、终审及预算；这些流程不作为新 Kritt 路径的开发要求 |
+
+### Local code audit MVP（已完成的 audit 路径）
+
+以下命令运行已有审计模式。新的 Kritt MVP 使用普通 `generic` 研究模式，其 `completed` 表示研究结束；此处的独立批准与 `budget_exhausted` 是 audit 模式的行为。
 
 The audit controller shares Cairn's worker drivers and runs alongside the Server and Dispatcher. The example uses only an already-configured local Claude Code CLI:
 

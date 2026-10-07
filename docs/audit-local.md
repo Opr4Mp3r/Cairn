@@ -1,6 +1,8 @@
-# 本地代码审计运行指南
+# 本地代码审计运行指南（已有 audit 模式）
 
 本指南对应审计控制器 MVP 的 CP6 交付。控制器是 Cairn 包内模块；本地入口运行独立的 Server、Dispatcher 和 Controller 三个进程，共用既有 harness。默认示例仅使用 claudecode。
+
+这是已完成的audit路径，其复核、终审和预算仍按现有实现运行。新的Kritt正向MVP使用generic项目，开发范围见[当前计划](specs/kritt-builder-mvp.md)；本指南的审核和恢复配置不需要移植到新入口。
 
 ## 运行准备
 
@@ -85,4 +87,4 @@ uv run --project cairn cairn audit --project proj_001 \
 
 `cairn/tests/test_audit_delivery.py` 用真实三个进程、HTTP 和 SQLite 加固定判断的假 Claude，检查成功、预算耗尽、启动失败、端口占用、中断及进程组回收。它验证编排，不能称作真实模型或真实漏洞验证。
 
-真实 Claude 的完整运行证据另存于 CP6 交接目录，明确记录源码夹具、配置、各阶段 session、实际终态和未确认项。代码到 CP6 即停，等待用户安排独立检查；开发自检不代表完整 MVP 已验收。
+真实Claude的完整运行证据保存在CP6交接目录，记录源码夹具、配置、各阶段session、实际终态和未确认项。CP1—CP6已经完成独立验收，CP6交付提交为`a2c64d9`；这些材料记录既有audit功能，不构成新Kritt路径的开发任务。
