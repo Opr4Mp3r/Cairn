@@ -7,6 +7,7 @@ import threading
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 import pytest
+import yaml
 
 from cairn.cli import main
 from cairn.controller.research import import_plan, run_research
@@ -59,7 +60,8 @@ def test_import_uses_generic_interfaces_and_maps_seed_ids(tmp_path, monkeypatch)
     assert "repo/" in project["hints"][0]["content"]
 
 
-def test_builder_cli_starts_dispatcher_after_import_and_writes_new_fact(prepared, monkeypatch):
+@pytest.mark.parametrize("ending", ["completed", "stopped"])
+def test_builder_cli_starts_dispatcher_after_import_and_writes_new_fact(prepared, monkeypatch, ending):
     config, path, view, run = prepared
     config.server = "http://127.0.0.1:0"
     config.runtime.interval = 1
@@ -70,9 +72,22 @@ def test_builder_cli_starts_dispatcher_after_import_and_writes_new_fact(prepared
     binary = path.parent / "bin" / "claude"
     calls = path.parent / "research-calls.jsonl"
     monkeypatch.setenv("RESEARCH_TEST_CALLS", str(calls))
+    monkeypatch.setenv("RESEARCH_TEST_ENDING", ending)
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
 
     def bounded_research(*args, **kwargs):
+        report = kwargs["report"]
+
+        def show_progress(event):
+            report(event)
+            if ending == "stopped" and event.get("fact_count", 0) >= 2:
+                client = CairnClient(event["server"], trust_env=False)
+                try:
+                    assert client.set_project_status(event["project_id"], "stopped").ok
+                finally:
+                    client.close()
+
+        kwargs["report"] = show_progress
         timer = threading.Timer(25, kwargs["cancellation"].cancel, args=("test deadline",))
         timer.start()
         try:
@@ -95,7 +110,7 @@ if '"output_schema"' not in prompt:
     observed = [f for f in graph["facts"] if f["description"].startswith("新探索读取：")]
     reason = "You need to judge two things:" in prompt
     if reason:
-        data = {"complete": {"from": [observed[0]["id"]], "description": "完成源码读取"}} if observed else {}
+        data = {"complete": {"from": [observed[0]["id"]], "description": "完成源码读取"}} if observed and os.environ["RESEARCH_TEST_ENDING"] == "completed" else {}
     else:
         source = pathlib.Path("repo/module/install/control.php").read_text()
         materials = json.loads(pathlib.Path("kritt-materials.json").read_text())
@@ -113,8 +128,22 @@ if '"output_schema"' not in prompt:
     assert result.exit_code == 0, result.output + "\n" + "\n".join(p.read_text() for p in run.glob("*.log"))
     summary = json.loads((run / "research.json").read_text())
     locator = json.loads((run / "project.json").read_text())
-    assert summary["status"] == "completed" and summary["project_id"] == locator["project_id"]
+    assert summary["status"] == ending and summary["project_id"] == locator["project_id"]
     assert set(summary["processes"]) == {"server", "dispatcher"}
+    events = [json.loads(line) for line in result.output.splitlines()]
+    assert events[0]["status"] == "researching"
+    assert events[0]["project_url"] == f"{summary['server']}/#/projects/{summary['project_id']}"
+    assert events[0]["fact_count"] == 1 and events[0]["open_intent_count"] == 1
+    assert events[-1]["status"] == ending and events[-1]["fact_count"] >= 2
+    assert events[-1]["results"] == summary["results"]
+    assert "export_error" not in summary
+    snapshot = json.loads(Path(summary["results"]["project"]).read_text())
+    graph = yaml.safe_load(Path(summary["results"]["graph"]).read_text())
+    timeline = Path(summary["results"]["timeline"]).read_text()
+    assert snapshot["project"]["id"] == locator["project_id"] and snapshot["project"]["status"] == ending
+    assert any(fact["description"].startswith("新探索读取：") for fact in graph["facts"])
+    assert "INTENT CONCLUDED" in timeline and "新探索读取：" in timeline
+    assert ("PROJECT COMPLETED" in timeline) == (ending == "completed")
     with sqlite3.connect(run / "cairn.db") as sql:
         facts = sql.execute("SELECT id, description FROM facts WHERE project_id = ?", (summary["project_id"],)).fetchall()
         assert any(description.startswith("新探索读取：") and fid not in locator["seed_ids"].values() for fid, description in facts)

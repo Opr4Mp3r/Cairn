@@ -239,6 +239,11 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
             click.echo(question)
         return click.prompt("请补充", type=str)
 
+    def show_research(event):
+        fields = ("status", "server", "project_url", "project_id", "run_dir",
+                  "fact_count", "open_intent_count", "results", "export_error")
+        click.echo(json.dumps({key: event[key] for key in fields if key in event}, ensure_ascii=False))
+
     def terminate(_signum, _frame):
         nonlocal interrupted
         if interrupted:
@@ -252,10 +257,7 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
         config = DispatchConfig.load(config_path)
         prepared = run_builder(config, target_name=target_name, user_goal=goal,
                              run_dir=folder, scan_id=scan_id, view_path=view_path, ask=reply, cancellation=token)
-        result = run_research(config, prepared, cancellation=token,
-                              report=lambda event: click.echo(json.dumps(
-                                  {key: event[key] for key in ("status", "server", "project_id", "run_dir")},
-                                  ensure_ascii=False)))
+        result = run_research(config, prepared, cancellation=token, report=show_research)
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -274,7 +276,9 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
                 os.environ[REGISTRY_ENV] = original_registry
     if interrupted:
         raise click.Abort()
-    click.echo(json.dumps({key: result[key] for key in ("status", "server", "project_id", "run_dir")}, ensure_ascii=False))
+    show_research(result)
+    if result.get("export_error"):
+        raise click.ClickException(f"研究结果导出失败：{result['export_error']}")
 
 
 @main.command("audit")

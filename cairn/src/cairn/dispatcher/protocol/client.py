@@ -110,10 +110,10 @@ class CairnClient:
     def review_completion(self, project_id: str, request_id: str, request: CompletionReviewRequest) -> ApiResult:
         return self._request_json("POST", f"/projects/{project_id}/audit/completions/{request_id}/review", request.model_dump(mode="json"))
 
-    def export_project(self, project_id: str) -> str:
+    def export_project(self, project_id: str, *, format: str = "yaml") -> str:
         response = self._session().get(
             self._url(f"/projects/{project_id}/export"),
-            params={"format": "yaml"},
+            params={"format": format},
             timeout=self._timeout,
         )
         response.raise_for_status()

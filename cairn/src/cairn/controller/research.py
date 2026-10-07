@@ -63,6 +63,16 @@ def import_plan(client: CairnClient, backend: LocalBackend, prepared: dict) -> d
     return result
 
 
+def save_results(client: CairnClient, project_id: str, folder: Path) -> dict[str, str]:
+    project = client.get_project(project_id)
+    paths = {"project": folder / "result.json", "graph": folder / "graph.yaml",
+             "timeline": folder / "timeline.txt"}
+    _write(paths["project"], project.model_dump(mode="json", by_alias=True))
+    paths["graph"].write_text(client.export_project(project_id), encoding="utf-8")
+    paths["timeline"].write_text(client.export_project(project_id, format="timeline"), encoding="utf-8")
+    return {key: str(path) for key, path in paths.items()}
+
+
 def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCancellation | None = None,
                  report=lambda event: None) -> dict:
     """Own a local Server, import the graph, then start the existing Dispatcher."""
@@ -106,18 +116,28 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
         client = CairnClient(config.server, trust_env=False)
         backend = LocalBackend(config.local)
         state.update(import_plan(client, backend, prepared))
+        state["project_url"] = f"{config.server}/#/projects/{state['project_id']}"
         state["status"] = "researching"
         dispatcher = spawn("dispatcher", ["dispatch", "--config", str(effective)])
         _write(folder / "research.json", state)
-        report(dict(state))
+        last_progress = None
         while True:
             check_cancelled()
             if processes["server"].poll() is not None:
                 raise RuntimeError("Server exited; see server.log")
             project = client.get_project(state["project_id"])
+            progress = {
+                "fact_count": sum(fact.id not in {"origin", "goal"} for fact in project.facts),
+                "open_intent_count": sum(intent.to is None for intent in project.intents),
+            }
+            state.update(progress)
             if project.project.status != "active":
                 state["status"] = project.project.status
                 return state
+            if progress != last_progress:
+                _write(folder / "research.json", state)
+                report(dict(state))
+                last_progress = progress
             if dispatcher.poll() is not None:
                 raise RuntimeError("Dispatcher exited; see dispatcher.log")
             time.sleep(.2)
@@ -134,6 +154,11 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
     finally:
         previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGTERM, signal.SIGINT)}
         try:
+            if client is not None and "project_id" in state:
+                try:
+                    state["results"] = save_results(client, state["project_id"], folder)
+                except Exception as exc:
+                    state["export_error"] = f"{type(exc).__name__}: {exc}"
             token.cancel("research shutdown")
             stop_processes(processes, registry)
         except BaseException as exc:
@@ -151,3 +176,5 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
                 log.close()
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
+            if state["status"] in {"interrupted", "failed"}:
+                report(dict(state))
