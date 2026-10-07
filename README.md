@@ -204,6 +204,16 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 | [Builder 研究入口](docs/builder-prepare.md) | 生成方案并启动普通研究，输出图页面链接和进度，结束时保存项目详情、图和时间线 |
 | [本地 audit 模式](docs/audit-local.md) | 已完成的独立审计控制器路径，包含复核、终审及预算；这些流程不作为新 Kritt 路径的开发要求 |
 
+Kritt研究使用[专用配置示例](dispatch.builder.example.yaml)。复制后填好目标源码、manifest及只读连接，以下命令会自行启动本次Server和Dispatcher：
+
+```sh
+uv run --project cairn cairn builder --config dispatch.builder.yaml --target zentao --scan-id 19 \
+  --goal "读取module/install/control.php中构造函数的进入和终止条件，列出表达式与行号，仅做静态源码阅读" \
+  --run-dir /absolute/path/to/new-run
+```
+
+完整准备步骤、结果文件和停止方式见[Builder使用指南](docs/builder-prepare.md)。
+
 ### Local code audit MVP（已完成的 audit 路径）
 
 以下命令运行已有审计模式。新的 Kritt MVP 使用普通 `generic` 研究模式，其 `completed` 表示研究结束；此处的独立批准与 `budget_exhausted` 是 audit 模式的行为。

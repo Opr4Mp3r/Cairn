@@ -1,0 +1,43 @@
+# 正向MVP：Builder取材和构图 → 普通Cairn研究 → 保存结果。
+server: "http://127.0.0.1:0"
+runtime:
+  execution: local
+  worker_healthcheck: disabled
+  max_workers: 1
+  max_running_projects: 1
+  max_project_workers: 1
+  interval: 3
+  healthcheck_timeout: 15
+  prompt_group: default
+tasks:
+  # 通用配置字段；Builder导入的项目关闭bootstrap。
+  bootstrap:
+    timeout: 120
+    conclude_timeout: 30
+  reason:
+    timeout: 120
+  explore:
+    timeout: 300
+    conclude_timeout: 60
+workers:
+  - name: claude-main
+    type: claudecode
+    task_types: [reason, explore]
+    max_running: 1
+    priority: 0
+controller:
+  roles:
+    builder: claude-main
+    # 沿用Cairn通用配置格式；本入口不调用reviewer。
+    reviewer: claude-main
+  timeouts:
+    build: 300
+  kritt:
+    dsn_env: CAIRN_KRITT_READONLY_DSN
+    targets:
+      zentao:
+        repo_full: easysoft/zentaopms
+        scan_id: 19
+        commit: d5bfff8c91cea48018275381e0a127ed6fa5c79f
+        source_root: ./target-source/zentao
+        source_manifest: ./target-source/zentao-manifest.json
