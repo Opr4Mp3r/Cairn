@@ -10,6 +10,7 @@ from cairn.dispatcher.contracts import (
     validate_reason_payload,
 )
 from cairn.dispatcher.runtime.process import ManagedProcess
+from cairn.dispatcher.workers.adapters.grok import GrokDriver
 from cairn.dispatcher.workers.adapters.pi import PiDriver
 
 
@@ -72,6 +73,15 @@ def test_pi_driver_extracts_session_and_last_assistant_text() -> None:
 
     assert driver.extract_session(None, stdout, "") == "session-123"
     assert driver.extract_response_text(stdout, "") == '{"accepted":true,"data":{}}'
+
+
+def test_grok_driver_extracts_json_text_and_keeps_raw_stdout_otherwise() -> None:
+    driver = GrokDriver()
+    stdout = json.dumps({"text": '{"accepted":true,"data":{}}', "sessionId": "abc", "stopReason": "end_turn"})
+
+    assert driver.extract_response_text(stdout, "") == '{"accepted":true,"data":{}}'
+    assert driver.extract_response_text('{"type":"error","message":"nope"}', "") == '{"type":"error","message":"nope"}'
+    assert driver.extract_response_text("not json", "") == "not json"
 
 
 def test_close_stream_closes_response_even_when_stream_close_fails() -> None:

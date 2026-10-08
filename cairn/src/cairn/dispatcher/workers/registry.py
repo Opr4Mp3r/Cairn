@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cairn.dispatcher.workers.adapters import ClaudeCodeDriver, CodexDriver, MockDriver, PiDriver
+from cairn.dispatcher.workers.adapters import ClaudeCodeDriver, CodexDriver, GrokDriver, MockDriver, PiDriver
 from cairn.dispatcher.workers.base import WorkerDriver
 
 
@@ -11,6 +11,7 @@ DRIVERS: dict[str, WorkerDriver] = {
     "claudecode": _CLAUDE,
     "codex": CodexDriver(),
     "pi": PiDriver(),
+    "grok": GrokDriver(),
     "mock": _MOCK,
 }
 
@@ -20,6 +21,7 @@ LOCAL_DRIVERS: dict[str, WorkerDriver] = {
     "claudecode": _CLAUDE,
     "codex": CodexDriver(local=True),
     "pi": PiDriver(local=True),
+    "grok": GrokDriver(local=True),
     "mock": _MOCK,
 }
 

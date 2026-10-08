@@ -6,6 +6,7 @@ from cairn.dispatcher.config import DispatchConfig, WorkerConfig
 from cairn.dispatcher.runtime.startup_healthcheck import run_startup_healthchecks
 from cairn.dispatcher.workers.adapters.claudecode import ClaudeCodeDriver
 from cairn.dispatcher.workers.adapters.codex import CodexDriver
+from cairn.dispatcher.workers.adapters.grok import GrokDriver
 from cairn.dispatcher.workers.adapters.mock import MockDriver
 from cairn.dispatcher.workers.adapters.pi import PiDriver
 from cairn.dispatcher.workers.health import http_ping, proxies_from_env
@@ -118,6 +119,58 @@ def test_pi_check_health_anthropic_uses_messages(monkeypatch) -> None:
 
     assert captured["url"] == "http://api/v1/messages"
     assert captured["headers"]["anthropic-version"]
+
+
+def test_grok_check_health_chat_completions(monkeypatch) -> None:
+    captured = _capture_post(monkeypatch, _Resp(200))
+    worker = _worker(
+        "grok",
+        {"GROK_BASE_URL": "https://api.x.ai/v1/", "XAI_API_KEY": "xai-k", "GROK_MODEL": "grok-4"},
+    )
+
+    result = GrokDriver().check_health(worker, timeout=5)
+
+    assert result.ok
+    assert captured["url"] == "https://api.x.ai/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer xai-k"
+    assert captured["json"]["model"] == "grok-4"
+    assert "anthropic-version" not in captured["headers"]
+
+
+def test_grok_check_health_messages_backend(monkeypatch) -> None:
+    captured = _capture_post(monkeypatch, _Resp(200))
+    worker = _worker(
+        "grok",
+        {
+            "GROK_BASE_URL": "https://api.example/v1",
+            "XAI_API_KEY": "xai-k",
+            "GROK_MODEL": "claude",
+            "GROK_API_BACKEND": "messages",
+        },
+    )
+
+    GrokDriver().check_health(worker, timeout=5)
+
+    assert captured["url"] == "https://api.example/v1/messages"
+    assert captured["headers"]["anthropic-version"] == "2023-06-01"
+
+
+def test_grok_check_health_responses_backend(monkeypatch) -> None:
+    captured = _capture_post(monkeypatch, _Resp(200))
+    worker = _worker(
+        "grok",
+        {
+            "GROK_BASE_URL": "https://api.example/v1",
+            "XAI_API_KEY": "xai-k",
+            "GROK_MODEL": "grok-4",
+            "GROK_API_BACKEND": "responses",
+        },
+    )
+
+    GrokDriver().check_health(worker, timeout=5)
+
+    assert captured["url"] == "https://api.example/v1/responses"
+    assert captured["json"]["input"][0]["content"] == "ping"
 
 
 def test_check_health_uses_worker_proxy(monkeypatch) -> None:

@@ -67,6 +67,15 @@ RUN pip3 install tccli awscli --break-system-packages && \
 RUN sudo npm install -g @openai/codex@0.118.0
 RUN sudo npm install -g @anthropic-ai/claude-code@2.1.98
 RUN sudo npm install -g @mariozechner/pi-coding-agent@0.73.0
+# Grok Build CLI, pinned to the release this driver targets.
+# `/bin/sh` does not fail `curl | bash` when curl exits non-zero with an empty
+# body, and the following `ln -sf` would then publish a dangling grok link.
+RUN curl -fsSL https://x.ai/cli/install.sh -o /tmp/grok-install.sh \
+    && bash /tmp/grok-install.sh 1.0.46 \
+    && rm -f /tmp/grok-install.sh \
+    && test -x /home/kali/.grok/bin/grok \
+    && sudo ln -sf /home/kali/.grok/bin/grok /usr/local/bin/grok \
+    && /usr/local/bin/grok --version
 
 RUN sudo chmod +x /usr/local/bin/kerbrute
 RUN mkdir -p /home/kali/.config/nuclei && \

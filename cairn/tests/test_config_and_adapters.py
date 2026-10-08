@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from cairn.dispatcher.config import DispatchConfig, WorkerConfig, validate_prompt_resources
 from cairn.dispatcher.workers.adapters.codex import CodexDriver
+from cairn.dispatcher.workers.adapters.grok import GrokDriver
 from cairn.dispatcher.workers.adapters.pi import PiDriver
 
 from conftest import make_config
@@ -109,6 +110,55 @@ def test_pi_driver_models_json_and_execute_argv_include_context_window_and_tools
     assert models["providers"]["cairn"]["models"][0]["contextWindow"] == 131072
     assert "--tools" in result.argv
     assert result.argv[-2:] == ["-p", "prompt"]
+
+
+def _grok_worker(**extra: str) -> WorkerConfig:
+    env = {
+        "GROK_MODEL": 'grok-4"pro',
+        "GROK_BASE_URL": "https://api.x.ai/v1/",
+        "XAI_API_KEY": "xai-secret",
+    }
+    env.update(extra)
+    return WorkerConfig.model_validate(
+        {
+            "name": "grok-worker",
+            "type": "grok",
+            "task_types": ["explore"],
+            "max_running": 1,
+            "priority": 0,
+            "env": env,
+        }
+    )
+
+
+def test_grok_worker_rejects_unknown_backend_and_bad_context_window() -> None:
+    with pytest.raises(ValidationError, match="GROK_API_BACKEND"):
+        _grok_worker(GROK_API_BACKEND="websocket")
+    with pytest.raises(ValidationError, match="GROK_MODEL_CONTEXT_WINDOW must be greater than 0"):
+        _grok_worker(GROK_MODEL_CONTEXT_WINDOW="0")
+
+
+def test_grok_container_driver_injects_private_model_config() -> None:
+    worker = _grok_worker(GROK_API_BACKEND="responses", GROK_MODEL_CONTEXT_WINDOW="131072")
+
+    result = GrokDriver().build_execute(worker, "prompt", "11111111-1111-1111-1111-111111111111")
+
+    assert result.argv[0] == "/bin/sh"
+    assert result.argv[4] == "/tmp/cairn-grok/grok-worker"
+    config = result.argv[5]
+    assert 'model = "grok-4\\"pro"' in config
+    assert 'base_url = "https://api.x.ai/v1"' in config
+    assert 'api_backend = "responses"' in config
+    assert "context_window = 131072" in config
+    assert "xai-secret" not in config
+    assert result.argv[result.argv.index("--model") + 1] == "cairn"
+    assert result.argv[result.argv.index("--session-id") + 1] == "11111111-1111-1111-1111-111111111111"
+    assert result.argv[-2:] == ["--single", "prompt"]
+    assert "GROK_MEMORY=0" in result.argv[2]
+
+    conclude = GrokDriver().build_conclude(worker, "done", "11111111-1111-1111-1111-111111111111")
+    assert conclude[conclude.index("--resume") + 1] == "11111111-1111-1111-1111-111111111111"
+    assert "--session-id" not in conclude
 
 
 def test_codex_driver_execute_argv_passes_model_endpoint_and_prompt() -> None:

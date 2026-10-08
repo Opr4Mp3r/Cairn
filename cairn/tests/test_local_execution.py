@@ -14,6 +14,7 @@ from cairn.dispatcher.scheduler import loop as loop_module
 from cairn.dispatcher.tasks import common, explore
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.workers.adapters.codex import CodexDriver
+from cairn.dispatcher.workers.adapters.grok import GrokDriver
 from cairn.dispatcher.workers.adapters.pi import PiDriver
 from cairn.dispatcher.workers.registry import get_driver
 
@@ -341,10 +342,31 @@ def test_pi_local_driver_omits_models_json_and_provider() -> None:
     assert argv[-2:] == ["-p", "PROMPT"]
 
 
+def test_grok_local_driver_uses_host_cli_without_model_injection() -> None:
+    worker = _bare_worker("grok")
+    session = "22222222-2222-2222-2222-222222222222"
+    argv = GrokDriver(local=True).build_execute(worker, "PROMPT", session).argv
+
+    assert argv[0] == "grok"
+    assert "--model" not in argv
+    assert "/bin/sh" not in argv
+    assert argv[argv.index("--session-id") + 1] == session
+    assert argv[-2:] == ["--single", "PROMPT"]
+    for flag in ("--always-approve", "--verbatim", "--no-plan", "--trust", "--output-format"):
+        assert flag in argv
+
+    conclude = GrokDriver(local=True).build_conclude(worker, "PROMPT", session)
+    assert conclude[0] == "grok"
+    assert conclude[conclude.index("--resume") + 1] == session
+    assert "--session-id" not in conclude
+
+
 def test_get_driver_selects_local_or_container_variant() -> None:
     assert get_driver("codex", "local").local is True
     assert get_driver("codex").local is False
     assert get_driver("pi", "local").local is True
+    assert get_driver("grok", "local").local is True
+    assert get_driver("grok").local is False
     # claudecode and mock are shared instances across both modes
     assert get_driver("claudecode", "local") is get_driver("claudecode")
     assert get_driver("mock", "local") is get_driver("mock")

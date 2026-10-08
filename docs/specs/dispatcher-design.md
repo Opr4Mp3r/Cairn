@@ -21,7 +21,7 @@ Agent 不直接认领 Intent，不直接 heartbeat，不直接调用 Cairn API�
 1. Agent 的输出任务收敛成三类：`bootstrap`、`reason` 和 `explore`；`bootstrap` 只在项目初始态运行，让 Agent 直接尝试解决整个问题；主阶段只有在已解决时才返回，且必须同时给出关键 Fact 和 `complete`；若主阶段超时，再由 `bootstrap_conclude` 收尾产出 Fact；`reason` 负责读图判断是否完成或是否需要提出一个新 intent；`explore` 只负责执行一个已认领 intent 并产出一个 Fact 结论。
 2. Dispatcher 是唯一的协议写入者和控制面；Agent 不 claim、不 heartbeat、不直接调用 Cairn API。
 3. 超时策略按任务类型定义；`bootstrap` 和 `explore` 都支持“第一阶段执行 + timeout / parse-fail 后用同一 session 进入 conclude 收尾”的双阶段模式。
-4. Prompt 以 markdown 文件形式随代码分发；支持按 prompt 组切换；Worker 行为由 `claudecode`、`codex`、`mock` 等 driver 实现；`dispatch.yaml` 只描述运行期参数。
+4. Prompt 以 markdown 文件形式随代码分发；支持按 prompt 组切换；Worker 行为由 `claudecode`、`codex`、`pi`、`grok`、`mock` 等 driver 实现；`dispatch.yaml` 只描述运行期参数。
 5. 调度上，项目初始态按 `project.bootstrap_enabled` 和 Worker 能力决定优先 `bootstrap` 或直接 `reason`；非初始态出现新 Fact / Hint 等新态势时优先 `reason`，否则优先消费可认领的 `explore` intent；`reason` 的并发约束通过服务端的项目级 `project.reason` lease 表达为“单项目最多一个”，`bootstrap` 的并发约束是“单项目最多一个保留 bootstrap intent 且最多一个 bootstrap 任务”，跨项目允许并行；`runtime.interval` 被刻意复用为主循环节拍和带 claim 任务的 heartbeat 周期。
 6. Worker 按独立的 LLM 并发配额单元建模；同一个 key 不拆成多个 Worker，因此并发控制使用 `workers[].max_running` 即可。
 7. 运行日志按“状态变化优先”设计：稳定轮询、正常 heartbeat、重复 skip 原则上不刷屏；容器创建、任务派发、容器内新进程启动、健康检查、超时、收尾、释放 intent、worker 进入短暂不可选窗口等事件必须可见。
@@ -196,6 +196,8 @@ dispatcher/
     adapters/
       claudecode.py
       codex.py
+      pi.py
+      grok.py
       mock.py
 ```
 
@@ -612,16 +614,18 @@ Dispatcher 固定从 `stdout` 取全文作为模型正文输出。
 | 字段 | 含义 | 说明 |
 | --- | --- | --- |
 | `name` | Worker 静态标识 | 协议写回时作为 `creator` 或 `worker` |
-| `type` | Worker driver 名 | 支持 `claudecode`、`codex`、`mock` |
+| `type` | Worker driver 名 | 支持 `claudecode`、`codex`、`pi`、`grok`、`mock` |
 | `task_types` | 支持的任务类型 | `bootstrap`、`reason`、`explore` |
 | `max_running` | Worker 并发上限 | 达到上限后暂不派发 |
 | `priority` | 选择优先级 | 数字越小越优先 |
 | `env` | 运行时环境变量 | 由对应 driver 使用；`mock` 的 phase 耗时和结果概率也通过这里配置 |
 
-系统提供三类 Worker driver：
+系统提供这些 Worker driver：
 
 - `claudecode`
 - `codex`
+- `pi`
+- `grok`（Grok Build 的 `grok` CLI）
 - `mock`
 
 也就是说：
@@ -644,9 +648,7 @@ Dispatcher 固定从 `stdout` 取全文作为模型正文输出。
 
 这些 driver 的能力约定是：
 
-- `claudecode` 支持双阶段 `explore`
-- `codex` 支持双阶段 `explore`
-- `mock` 支持双阶段 `explore`
+- `claudecode`、`codex`、`pi`、`grok`、`mock` 都支持双阶段 `explore`
 
 并发建模约定：
 
@@ -664,7 +666,7 @@ Dispatcher 固定从 `stdout` 取全文作为模型正文输出。
 - API key 有效
 - model 可调用
 
-driver 按各自 provider 的协议构造请求：`claudecode` 打 `{base}/v1/messages`，`codex` 打 `{base}/responses`，`pi` 按 `PI_PROVIDER_API` 选择 `/chat/completions`、`/responses` 或 `/v1/messages`。请求会带上 worker 环境里的 `http(s)_proxy`，从而与 worker 实际出网路径一致。
+driver 按各自 provider 的协议构造请求：`claudecode` 打 `{base}/v1/messages`，`codex` 打 `{base}/responses`，`pi` 按 `PI_PROVIDER_API` 选择 `/chat/completions`、`/responses` 或 `/v1/messages`，`grok` 按 `GROK_API_BACKEND` 选择 `{base}/chat/completions`、`{base}/responses` 或 `{base}/messages`。请求会带上 worker 环境里的 `http(s)_proxy`，从而与 worker 实际出网路径一致。
 
 执行规则：
 
@@ -767,6 +769,44 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
   -- "{prompt}"
 ```
 
+#### `grok` driver
+
+Grok Build。依赖环境变量（仅 `container` 模式必填；`local` 模式复用本机 `grok` 登录和 `~/.grok/config.toml` 里的默认模型）：
+
+- `GROK_MODEL`
+- `GROK_BASE_URL`（API 前缀，例如 `https://api.x.ai/v1`；CLI 自己再拼路径）
+- `XAI_API_KEY`
+
+可选：
+
+- `GROK_API_BACKEND`：`chat_completions`（默认）、`responses`、`messages`
+- `GROK_MODEL_CONTEXT_WINDOW`：正整数，写入注入的模型配置
+
+健康检查等价于向 `{GROK_BASE_URL}` 对应后端发一次最小请求。`messages` 会带 `anthropic-version`。
+
+已知行为：
+
+- driver 预先生成 UUID，首轮用 `--session-id` 创建新会话；该 id 已存在时 CLI 报错，不会复用旧会话
+- 二阶段用 `--resume` 恢复同一会话
+- `--output-format json` 的 stdout 是一个对象；driver 取出其中的 `text` 作为模型正文
+- `--always-approve`、`--verbatim`、`--no-plan`、`--trust` 让无交互进程不会停在权限、计划或目录信任提示上
+- `container` 模式把模型端点写进该 worker 私有的 `GROK_HOME`（`/tmp/cairn-grok/<worker>`），并用 `-m cairn` 选中这条注入配置；密钥只通过 `XAI_API_KEY` 进入进程，不写进配置文件
+- `local` 模式不注入模型或端点，命令就是本机 `grok`
+
+第一阶段执行（`local`）：
+
+```bash
+grok --always-approve --output-format json --no-auto-update --verbatim --no-plan --trust \
+  --session-id "{session}" --single "{prompt}"
+```
+
+二阶段收尾（`local`）：
+
+```bash
+grok --always-approve --output-format json --no-auto-update --verbatim --no-plan --trust \
+  --resume "{session}" --single "{prompt}"
+```
+
 #### `mock` driver
 
 `mock` driver 用于本地观察 dispatcher 的成功、失败和超时路径。
@@ -828,9 +868,9 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 - 每个 Worker 都必须有 `type`
 - 每个 Worker 都必须有 `max_running`
 - `task_types` 只允许 `bootstrap`、`reason`、`explore`
-- `type` 只允许 `claudecode`、`codex`、`mock`
+- `type` 只允许 `claudecode`、`codex`、`pi`、`grok`、`mock`
 - `max_running` 必须是正整数
-- `claudecode`、`codex`、`mock` 都支持双阶段 `explore`
+- `claudecode`、`codex`、`pi`、`grok`、`mock` 都支持双阶段 `explore`
 - `runtime.prompt_group` 对应的 prompt 目录必须存在
 - 代码工程中的 prompt 资源必须存在
 - 默认 prompt 组下，`reason.md` 必须至少覆盖 `{graph_yaml}`、`{fact_ids}`、`{open_intents}`
@@ -925,7 +965,7 @@ codex exec resume "{session}" --dangerously-bypass-approvals-and-sandbox --model
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
 | `name` | 是 | Worker 静态标识；协议写回时使用这个值作为 `creator` 或 `worker` |
-| `type` | 是 | Worker driver 名；支持 `claudecode`、`codex`、`mock` |
+| `type` | 是 | Worker driver 名；支持 `claudecode`、`codex`、`pi`、`grok`、`mock` |
 | `task_types` | 是 | 该 Worker 支持的任务类型列表 |
 | `max_running` | 是 | 该 Worker 自身的并发上限 |
 | `priority` | 是 | 当前任务类型的候选 Worker 中，数字越小优先级越高 |

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 TaskType = Literal["reason", "explore", "bootstrap"]
-WorkerType = Literal["claudecode", "codex", "pi", "mock"]
+WorkerType = Literal["claudecode", "codex", "pi", "grok", "mock"]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
@@ -33,6 +33,11 @@ WORKER_ENV_KEYS: dict[WorkerType, tuple[str, ...]] = {
         "PI_BASE_URL",
         "PI_API_KEY",
         "PI_PROVIDER_API",
+    ),
+    "grok": (
+        "GROK_MODEL",
+        "GROK_BASE_URL",
+        "XAI_API_KEY",
     ),
     "mock": (),
 }
@@ -200,6 +205,11 @@ class WorkerConfig(BaseModel):
         # The checks below are mode-independent and always apply.
         if self.type == "pi":
             _validate_optional_positive_int_env(self.name, self.env, "PI_MODEL_CONTEXT_WINDOW")
+        if self.type == "grok":
+            from cairn.dispatcher.workers.adapters.grok import validate_grok_env
+
+            validate_grok_env(self.name, self.env)
+            _validate_optional_positive_int_env(self.name, self.env, "GROK_MODEL_CONTEXT_WINDOW")
         if self.type == "mock":
             resolve_mock_behavior(self.name, self.env)
         return self

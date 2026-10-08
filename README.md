@@ -180,7 +180,7 @@ uv run --project cairn cairn dispatch --config dispatch.yaml --startup-healthche
 
 ### Local mode (no Docker)
 
-Instead of one container per project, workers can run directly on the dispatcher host, reusing the machine's already-configured `claude` / `codex` / `pi` CLIs — no Docker, and no API keys in the config.
+Instead of one container per project, workers can run directly on the dispatcher host, reusing the machine's already-configured `claude` / `codex` / `pi` / `grok` CLIs — no Docker, and no API keys in the config. `grok` is Grok Build's headless CLI.
 
 ```bash
 cp dispatch.local.example.yaml dispatch.yaml
