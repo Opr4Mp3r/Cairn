@@ -9,14 +9,35 @@ import signal
 import subprocess
 import time
 
-from cairn.controller.builder import Finish, _write
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from cairn.controller.kritt_query import write_json as _write
 from cairn.controller.local import CLI, start_server, stop_processes
 from cairn.dispatcher.config import DispatchConfig, LocalConfig
 from cairn.dispatcher.protocol.client import CairnClient
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.runtime.local_backend import LocalBackend
 from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
-from cairn.server.models import CreateHintInline, CreateProjectRequest
+from cairn.server.models import AuditInitialIntent, AuditSeed, CreateHintInline, CreateProjectRequest
+
+
+class GenericPlan(BaseModel):
+    """Keep the already-delivered generic importer independent of audit plans."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    title: str = Field(min_length=1)
+    origin: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+    seeds: list[AuditSeed] = Field(min_length=1)
+    intents: list[AuditInitialIntent] = Field(min_length=1)
+    hints: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def sources(self):
+        keys = [seed.key for seed in self.seeds]
+        if len(keys) != len(set(keys)) or any(not set(intent.from_) <= set(keys) for intent in self.intents):
+            raise ValueError("generic intents require unique imported seed keys")
+        return self
 
 
 def _data(response, action: str):
@@ -29,7 +50,7 @@ def import_plan(client: CairnClient, backend: LocalBackend, prepared: dict) -> d
     """Use ordinary project/intent/conclude calls before the Dispatcher starts."""
     folder = Path(prepared["run_dir"]).resolve()
     repo = Path(prepared["source_root"]).resolve(strict=True)
-    plan = Finish.model_validate({"action": "finish", **json.loads(Path(prepared["plan"]).read_text())})
+    plan = GenericPlan.model_validate(json.loads(Path(prepared["plan"]).read_text()))
     context = {key: prepared[key] for key in ("scan_id", "commit_sha", "repo_full", "source_root")}
     context.update(goal=plan.goal, user_goal=prepared.get("user_goal", plan.goal))
     instructions = (

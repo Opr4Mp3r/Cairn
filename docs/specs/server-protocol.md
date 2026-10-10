@@ -1,6 +1,6 @@
 # Cairn 协作探索协议
 
-适用范围：本文说明已有普通generic项目的图协议与直接Complete行为。Kritt正向MVP复用该协议，剩余开发范围见[kritt-builder-mvp.md](kritt-builder-mvp.md)。已实现的audit专用元数据、完成申请和终审另见[audit控制器记录](audit-controller-mvp.md)，不作为新Kritt路径的前置步骤。
+适用范围：本文说明已有普通 generic 项目的图协议与直接 Complete 行为。当前 Kritt Builder 的 generic 交付见 [v0.3 文档](kritt-builder-mvp.md)；后续按 [接回 audit 的 MVP 方案](kritt-audit-reconnect-mvp.md) v0.5 使用已有 audit 元数据、完成申请和终审。其语义见 [audit 控制器记录](audit-controller-mvp.md)，不能将 generic 直接 Complete 用作审计批准。
 
 ---
 

@@ -1,6 +1,6 @@
 # Dispatcher
 
-适用范围：本文描述已有通用Dispatcher机制，主要对应generic项目。Kritt正向MVP直接复用这些能力，当前新增工作以[kritt-builder-mvp.md](kritt-builder-mvp.md)为准。已实现的audit复核/预算扩展见[audit控制器记录](audit-controller-mvp.md)，不作为新Kritt路径的开发任务。
+适用范围：本文描述已有通用 Dispatcher 机制，主要对应 generic 项目。当前 Kritt Builder 的 generic 交付见 [v0.3 文档](kritt-builder-mvp.md)；后续新增工作以 [接回 audit 的 MVP 方案](kritt-audit-reconnect-mvp.md) v0.5 为准。已有 audit 调度、复核和预算见 [audit 控制器记录](audit-controller-mvp.md)，接回时复用，不另建研究架构。
 
 ---
 

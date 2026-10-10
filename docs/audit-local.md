@@ -2,7 +2,7 @@
 
 本指南对应审计控制器 MVP 的 CP6 交付。控制器是 Cairn 包内模块；本地入口运行独立的 Server、Dispatcher 和 Controller 三个进程，共用既有 harness。默认示例仅使用 claudecode。
 
-这是已完成的audit路径，其复核、终审和预算仍按现有实现运行。新的Kritt正向MVP使用generic项目，开发范围见[当前计划](specs/kritt-builder-mvp.md)；本指南的审核和恢复配置不需要移植到新入口。
+这是已完成的 audit 路径，其复核、终审和预算仍按现有实现运行。当前 Kritt Builder 的 R-CP1 只准备 AuditPlan；后续按 [接回 audit 的 MVP 方案](specs/kritt-audit-reconnect-mvp.md) v0.5 复用这里的研究和结案功能。接回尚未完整交付，本指南继续描述现有源码型入口；不把其历史开发任务和全部恢复配置重新列为 MVP 新需求。
 
 ## 运行准备
 

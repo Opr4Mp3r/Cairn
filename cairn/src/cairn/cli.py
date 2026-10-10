@@ -217,9 +217,8 @@ def kritt_probe(config_path: Path, target_name: str, goal: str, scan_id: int | N
 @click.option("--run-dir", type=click.Path(file_okay=False, path_type=Path), required=True)
 @click.option("--view", "view_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Explicit offline fixture; otherwise read PostgreSQL")
 def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
-    """从自然语言需求查询 Kritt、创建初始图并启动普通研究。"""
+    """准备 AuditPlan；R-CP1 阶段尚未接通 audit 研究。"""
     from cairn.controller.builder import run_builder
-    from cairn.controller.research import run_research
     from cairn.controller.local import stop_agent_groups
     from cairn.dispatcher.config import DispatchConfig
     from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -239,11 +238,6 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
             click.echo(question)
         return click.prompt("请补充", type=str)
 
-    def show_research(event):
-        fields = ("status", "server", "project_url", "project_id", "run_dir",
-                  "fact_count", "open_intent_count", "results", "export_error")
-        click.echo(json.dumps({key: event[key] for key in fields if key in event}, ensure_ascii=False))
-
     def terminate(_signum, _frame):
         nonlocal interrupted
         if interrupted:
@@ -257,7 +251,8 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
         config = DispatchConfig.load(config_path)
         prepared = run_builder(config, target_name=target_name, user_goal=goal,
                              run_dir=folder, scan_id=scan_id, view_path=view_path, ask=reply, cancellation=token)
-        result = run_research(config, prepared, cancellation=token, report=show_research)
+        click.echo(json.dumps(prepared, ensure_ascii=False))
+        raise click.ClickException("R-CP1 已生成审计方案；audit 接回尚未完成，未创建或启动研究项目。")
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -276,9 +271,6 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
                 os.environ[REGISTRY_ENV] = original_registry
     if interrupted:
         raise click.Abort()
-    show_research(result)
-    if result.get("export_error"):
-        raise click.ClickException(f"研究结果导出失败：{result['export_error']}")
 
 
 @main.command("audit")

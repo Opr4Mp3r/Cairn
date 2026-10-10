@@ -1,6 +1,10 @@
-# Builder：从需求生成方案并启动研究
+# Builder：准备审计方案（R-CP1 中间态）
 
-版本以 `docs/specs/kritt-builder-mvp.md` v0.3 为准。Builder生成方案后创建普通Cairn项目，导入种子和研究Intents，准备源码/材料目录，再启动本次Dispatcher。
+2026-10-10：工作区已完成 [v0.5](specs/kritt-audit-reconnect-mvp.md) 的 R-CP1 开发，并获用户提交授权。Builder 通过同一 harness session 自主查询 Kritt、读取源码并生成 AuditPlan；R-CP2 的 audit 初始化、监督和研究尚未接通。
+
+当前 `cairn builder` 命令生成方案后打印 `plan_ready` 和产物路径，然后以非零退出码明确提示“audit 接回尚未完成”。不会启动 Server、Dispatcher 或创建 generic 项目。开发验收直接使用 `run_builder()`，其成功结果为 `plan_ready`。完整运行脚本见本地 R-CP1 交接材料。
+
+下面保留 v0.3 已交付版本的历史准备、研究与结果说明；其中“自动启动研究”和 completed 描述不适用于本次 R-CP1 中间态。现有源码型 audit 入口及普通项目仍可单独使用。
 
 ## 首次准备
 

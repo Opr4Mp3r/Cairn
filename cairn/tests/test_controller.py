@@ -73,13 +73,40 @@ def test_controller_and_research_share_execution_and_fresh_sessions(tmp_path, mo
 
     monkeypatch.setattr(execution, "run_worker_process", spy)
     first = call(config, tmp_path)
+    continued = call(config, tmp_path, session=first.session)
     second = call(config, tmp_path, role="reviewer")
-    assert first.status == second.status == "success"
+    assert first.status == continued.status == second.status == "success"
+    assert continued.session == first.session
     assert first.session and second.session and first.session != second.session
     assert first.data == {"path": "/source.txt", "content": "observed"}
-    assert len(invocations) == 2
-    assert first.session in invocations[0] and second.session in invocations[1]
+    assert len(invocations) == 3
+    assert first.session in invocations[0] and second.session in invocations[2]
+    assert invocations[1][1:3] == ["-r", first.session]
     assert first.process.stdout and first.response
+
+
+def test_grok_controller_continues_session_and_parses_native_envelope(tmp_path, monkeypatch):
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    binary = folder / "grok"
+    binary.write_text("#!/bin/sh\n" + print_json({"text": json.dumps({"path": "/source.txt", "content": "observed"})}))
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(folder) + os.pathsep + os.environ["PATH"])
+    payload = config_payload()
+    payload["workers"][0]["type"] = "grok"
+    config = DispatchConfig.model_validate(payload)
+    commands = []
+    runner = execution.run_worker_process
+    def spy(*args, **kwargs):
+        commands.append(args[3])
+        return runner(*args, **kwargs)
+    monkeypatch.setattr(execution, "run_worker_process", spy)
+    first = call(config, tmp_path)
+    continued = call(config, tmp_path, session=first.session)
+    assert first.status == continued.status == "success" and first.session == continued.session
+    assert continued.data == {"path": "/source.txt", "content": "observed"}
+    assert "--session-id" in commands[0] and "--resume" in commands[1]
+    assert "--session-id" not in commands[1] and first.session in commands[1]
 
 
 @pytest.mark.parametrize("body,status", [

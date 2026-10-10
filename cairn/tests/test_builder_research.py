@@ -14,6 +14,7 @@ from cairn.controller.research import import_plan, run_research
 from cairn.dispatcher.config import LocalConfig
 from cairn.dispatcher.protocol.client import ApiResult, CairnClient
 from cairn.dispatcher.runtime.local_backend import LocalBackend
+from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.server import db
 from cairn.server.app import app
 from test_builder import prepared
@@ -61,7 +62,7 @@ def test_import_uses_generic_interfaces_and_maps_seed_ids(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("ending", ["completed", "stopped"])
-def test_builder_cli_starts_dispatcher_after_import_and_writes_new_fact(prepared, monkeypatch, ending):
+def test_legacy_generic_research_still_imports_and_writes_new_fact(prepared, monkeypatch, ending):
     config, path, view, run = prepared
     config.server = "http://127.0.0.1:0"
     config.runtime.interval = 1
@@ -96,7 +97,6 @@ def test_builder_cli_starts_dispatcher_after_import_and_writes_new_fact(prepared
             timer.cancel()
             timer.join()
 
-    monkeypatch.setattr("cairn.controller.research.run_research", bounded_research)
     prefix = r'''
 import json, os, pathlib, re, sys
 prompt = sys.argv[-1]
@@ -123,14 +123,23 @@ if '"output_schema"' not in prompt:
 '''
     original = binary.read_text()
     binary.write_text(original.split("\n", 1)[0] + "\n" + prefix + original.split("\n", 1)[1])
-    result = CliRunner().invoke(main, ["builder", "--config", str(path), "--target", "test", "--goal", "读取源码",
-                                      "--view", str(view), "--run-dir", str(run)])
-    assert result.exit_code == 0, result.output + "\n" + "\n".join(p.read_text() for p in run.glob("*.log"))
+    run.mkdir()
+    plan = {"title": "旧generic研究", "origin": "已有材料", "goal": "读取源码",
+            "seeds": [{"key": "entry", "description": "入口材料"}],
+            "intents": [{"from": ["entry"], "description": "继续读取源码"}], "hints": []}
+    (run / "plan.json").write_text(json.dumps(plan))
+    (run / "selected-materials.json").write_text('[{"condition":"待核对"}]')
+    target = config.controller.kritt.targets["test"]
+    ready = {"run_dir": str(run), "source_root": target.source_root, "plan": str(run / "plan.json"),
+             "materials": str(run / "selected-materials.json"), "repo_full": target.repo_full,
+             "scan_id": 19, "commit_sha": "a" * 40}
+    events = []
+    result = bounded_research(config, ready, cancellation=TaskCancellation(), report=events.append)
+    events.append(result)
     summary = json.loads((run / "research.json").read_text())
     locator = json.loads((run / "project.json").read_text())
     assert summary["status"] == ending and summary["project_id"] == locator["project_id"]
     assert set(summary["processes"]) == {"server", "dispatcher"}
-    events = [json.loads(line) for line in result.output.splitlines()]
     assert events[0]["status"] == "researching"
     assert events[0]["project_url"] == f"{summary['server']}/#/projects/{summary['project_id']}"
     assert events[0]["fact_count"] == 1 and events[0]["open_intent_count"] == 1

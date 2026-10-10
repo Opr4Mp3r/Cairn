@@ -30,6 +30,7 @@ def call_agent(
     timeout_seconds: int,
     phase: str,
     cancellation: TaskCancellation | None = None,
+    session: str | None = None,
 ) -> AgentCallResult:
     if config.controller is None:
         raise ValueError("controller configuration is required")
@@ -47,14 +48,18 @@ def call_agent(
         if binary is not None and shutil.which(binary) is None:
             raise ValueError(f"worker CLI is not on PATH: {binary}")
 
-    session = driver.prepare_session()
-    command = driver.build_execute(worker, prompt, session)
-    session = command.session or session
+    if session is None:
+        session = driver.prepare_session()
+        command = driver.build_execute(worker, prompt, session)
+        session = command.session or session
+        argv = command.argv
+    else:
+        argv = driver.build_conclude(worker, prompt, session)
     started = time.monotonic()
     cancellation = cancellation or TaskCancellation()
     try:
         process = execution.run_worker_process(
-            backend, str(workspace.resolve()), worker, command.argv,
+            backend, str(workspace.resolve()), worker, argv,
             phase=phase, timeout_seconds=timeout_seconds, cancellation=cancellation,
         )
     except OSError as exc:

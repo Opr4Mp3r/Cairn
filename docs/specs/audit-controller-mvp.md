@@ -4,7 +4,7 @@
 
 状态更新：2026年10月7日。本文所述CP1—CP6已完成，CP6交付提交为`a2c64d9`。下文保留原audit模式的设计和历史开发任务，用于理解、使用及维护既有功能，不是当前剩余开发清单。
 
-新的Kritt集成以[kritt-builder-mvp.md](kritt-builder-mvp.md) v0.3为准，使用普通generic研究路径。本文的对抗预审、种子复核、Overseer、终审、预算恢复及历史验收矩阵不构成B-CP2之后的新增要求；已有audit功能及其运行语义保留。
+2026-10-10 更新：Kritt Builder 先前已交付的 generic 路径记录于 [v0.3 文档](kritt-builder-mvp.md)；后续按 [接回 audit 的 MVP 方案](kritt-audit-reconnect-mvp.md) v0.5 复用本文已有审计功能。R-CP1 当前只准备 AuditPlan，接回尚未完整交付；历史 CP1—CP6 和验收矩阵不重新列为开发任务。
 
 原方案于2026年10月4日基于`oritera/Cairn`的`8e7e0ea`制定。以下“首版”“开发任务”等措辞均指当时的audit控制器开发。
 
