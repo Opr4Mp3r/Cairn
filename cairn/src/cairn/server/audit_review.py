@@ -7,7 +7,7 @@ import uuid
 
 from fastapi import HTTPException
 
-from cairn.audit_evidence import json_digest, repository_baseline, source_evidence
+from cairn.audit_evidence import json_digest, source_evidence, assert_repository_unchanged
 from cairn.server.models import (
     AuditCompletion, AuditFactData, AuditMetadata, AuditRecord, AuditRecordRequest,
     CompleteRequest, CompletionClaimRequest, CompletionReviewRequest,
@@ -106,7 +106,7 @@ def node_input(conn, metadata: AuditMetadata, object_type: str, object_id: str) 
 
 def validate_fact_evidence(metadata: AuditMetadata, data: AuditFactData) -> AuditFactData:
     try:
-        checked = source_evidence(Path(metadata.repo_path), data.evidence)
+        checked = source_evidence(Path(metadata.repo_path), data.evidence, metadata.baseline)
         files = metadata.baseline.get("files", {})
         if not isinstance(files, dict) or not checked or any(files.get(ref.path) != ref.sha256 for ref in checked):
             raise ValueError("evidence is missing or outside the fixed source baseline")
@@ -361,8 +361,7 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
         if not _cvss_matches(body.assessment.cvss_vector.model_dump() if body.assessment.cvss_vector else {}, constraints):
             raise HTTPException(409, "CVSS vector does not meet the fixed policy")
         try:
-            if repository_baseline(Path(metadata.repo_path), Path(metadata.workspace_root))["files"] != metadata.baseline.get("files"):
-                raise ValueError("source baseline changed")
+            assert_repository_unchanged(Path(metadata.repo_path), metadata.baseline, Path(metadata.workspace_root))
         except (OSError, ValueError, RuntimeError) as exc:
             raise HTTPException(409, f"Baseline cannot support approval: {exc}") from exc
         closure = premise_closure(facts_snapshot(conn, metadata.project_id), request.from_)

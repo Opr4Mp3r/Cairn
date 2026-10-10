@@ -123,7 +123,7 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
         raise ValueError("run directory must be outside the audited source")
     folder.mkdir(parents=True, exist_ok=False)
     cancellation = cancellation or TaskCancellation()
-    calls, session = 0, None
+    prepared = {}
     query_context = folder / "kritt-context.json"
     try:
         if view_path is None:
@@ -152,57 +152,18 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
         references = _references(target, folder)
         messages = [{"role": "user", "content": user_goal.strip()}]
         _write(folder / "requirements.json", {"user_goal": user_goal.strip(), "messages": messages})
-        local = config.local or LocalConfig()
-        backend = LocalBackend(local.model_copy(update={
-            "excluded_env": list(dict.fromkeys([*local.excluded_env, settings.dsn_env])),
-        }))
-        instruction = resources.files("cairn.controller").joinpath("prompts/builder.md").read_text(encoding="utf-8")
-        context = {
-            "user_goal": user_goal.strip(), "requirements_path": str(folder / "requirements.json"),
-            "repo_path": str(repo), "repo_full": view.scan["repo_full"],
-            "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
-            "references_path": str(references),
-            "kritt_query_command": shlex.join([sys.executable, "-m", "cairn.controller.kritt_query",
-                                                "--context", str(query_context)]),
-            "output_schema": BuilderAction.model_json_schema(),
+        prepared = {
+            "status": "preparing", "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
+            "repo_full": target.repo_full, "source_root": str(repo), "run_dir": str(folder),
+            "target": target_name, "user_goal": user_goal.strip(), "builder_session": None, "calls": 0,
+            "plan": str(folder / "plan.json"), "materials": str(folder / "selected-materials.json"),
+            "requirements": str(folder / "requirements.json"), "references": str(references),
+            "source_baseline": str(folder / "source-baseline.json"), "query_context": str(query_context),
         }
-        while True:
-            calls += 1
-            action, session = _turn(config, backend, folder, calls, instruction, context, cancellation, session)
-            counts = collect_queries(query_context)
-            if isinstance(action, Ask):
-                if ask is None:
-                    raise ValueError("需要补充信息后重新运行：" + "；".join(action.questions))
-                if not session:
-                    raise RuntimeError("builder harness returned no session for the answer")
-                reply = ask(action.questions)
-                if not isinstance(reply, str) or not reply.strip():
-                    raise ValueError("补充内容为空")
-                messages.extend([{"role": "assistant", "content": "\n".join(action.questions)},
-                                 {"role": "user", "content": reply.strip()}])
-                _write(folder / "requirements.json", {"user_goal": user_goal.strip(), "messages": messages})
-                context = {"reply": reply.strip(), "requirements_path": str(folder / "requirements.json"),
-                           "output_schema": BuilderAction.model_json_schema()}
-                instruction = "结合用户答复继续当前开题，必要时使用已有工具；最终只返回 ask 或 finish JSON。"
-                continue
-            for seed in action.seeds:
-                seed.audit.review_status = "unverified"
-            plan = action.model_dump(mode="json", by_alias=True, exclude={"action"})
-            _write(folder / "plan.json", plan)
-            summary = {
-                "status": "plan_ready", "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
-                "repo_full": target.repo_full, "source_root": str(repo), "run_dir": str(folder),
-                "target": target_name, "user_goal": user_goal.strip(), "builder_session": session,
-                "plan": str(folder / "plan.json"), "materials": str(folder / "selected-materials.json"),
-                "requirements": str(folder / "requirements.json"), "references": str(references),
-                "source_baseline": str(folder / "source-baseline.json"), "query_context": str(query_context),
-                "calls": calls, **counts, "seeds": len(action.seeds), "intents": len(action.intents),
-            }
-            _write(folder / "run.json", summary)
-            return summary
+        return continue_builder(config, prepared, ask=ask, cancellation=cancellation)
     except BaseException as exc:
         error = {"status": "error", "type": type(exc).__name__, "error": str(exc),
-                 "calls": calls, "builder_session": session}
+                 "calls": prepared.get("calls", 0), "builder_session": prepared.get("builder_session")}
         if query_context.exists():
             try:
                 collect_queries(query_context)
@@ -210,3 +171,63 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
                 error["collection_error"] = str(collection_error)
         _write(folder / "error.json", error)
         raise
+
+
+def continue_builder(config: DispatchConfig, prepared: dict, *, current_plan: AuditPlan | None = None,
+                     preflight_issues: list[str] | None = None, ask=None, cancellation=None) -> dict:
+    """Continue the original Builder after an answer or independent preflight issues."""
+    folder = Path(prepared["run_dir"])
+    settings = config.controller.kritt
+    local = config.local or LocalConfig()
+    backend = LocalBackend(local.model_copy(update={
+        "excluded_env": list(dict.fromkeys([*local.excluded_env, settings.dsn_env])),
+    }))
+    cancellation = cancellation or TaskCancellation()
+    requirements = json.loads(Path(prepared["requirements"]).read_text())
+    messages = requirements["messages"]
+    user_goal = prepared["user_goal"]
+    calls, session = prepared.get("calls", 0), prepared.get("builder_session")
+    if current_plan is not None and not session:
+        raise ValueError("builder harness returned no session for preflight revision")
+    instruction = resources.files("cairn.controller").joinpath("prompts/builder.md").read_text(encoding="utf-8")
+    context = {
+        "user_goal": user_goal, "requirements_path": prepared["requirements"],
+        "repo_path": prepared["source_root"], "repo_full": prepared["repo_full"],
+        "scan_id": prepared["scan_id"], "commit_sha": prepared["commit_sha"],
+        "references_path": prepared["references"],
+        "kritt_query_command": shlex.join([sys.executable, "-m", "cairn.controller.kritt_query",
+                                            "--context", prepared["query_context"]]),
+        "output_schema": BuilderAction.model_json_schema(),
+    }
+    if current_plan is not None:
+        context.update(plan=current_plan.model_dump(mode="json", by_alias=True),
+                       preflight_issues=preflight_issues or [])
+    while True:
+        calls += 1
+        prepared["calls"] = calls
+        action, session = _turn(config, backend, folder, calls, instruction, context, cancellation, session)
+        prepared["builder_session"] = session
+        counts = collect_queries(Path(prepared["query_context"]))
+        if isinstance(action, Ask):
+            if ask is None:
+                raise ValueError("需要补充信息后重新运行：" + "；".join(action.questions))
+            if not session:
+                raise RuntimeError("builder harness returned no session for the answer")
+            reply = ask(action.questions)
+            if not isinstance(reply, str) or not reply.strip():
+                raise ValueError("补充内容为空")
+            messages.extend([{"role": "assistant", "content": "\n".join(action.questions)},
+                             {"role": "user", "content": reply.strip()}])
+            _write(folder / "requirements.json", {"user_goal": user_goal.strip(), "messages": messages})
+            context = {"reply": reply.strip(), "requirements_path": str(folder / "requirements.json"),
+                       "output_schema": BuilderAction.model_json_schema()}
+            instruction = "结合用户答复继续当前开题，必要时使用已有工具；最终只返回 ask 或 finish JSON。"
+            continue
+        for seed in action.seeds:
+            seed.audit.review_status = "unverified"
+        plan = action.model_dump(mode="json", by_alias=True, exclude={"action"})
+        _write(folder / "plan.json", plan)
+        prepared.update(status="plan_ready", builder_session=session, calls=calls,
+                        **counts, seeds=len(action.seeds), intents=len(action.intents))
+        _write(folder / "run.json", prepared)
+        return prepared

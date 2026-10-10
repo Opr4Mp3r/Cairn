@@ -2,59 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
 from typing import TYPE_CHECKING
 
-from cairn.audit_evidence import json_digest, source_evidence
+from cairn.audit_evidence import (
+    json_digest, source_evidence, source_files as _source_files, relative_source_path as _relative_path,
+    assert_source_unchanged, normalize_source_path,
+)
 from cairn.controller.kritt import check_control
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.server.models import EvidenceReference
 
 if TYPE_CHECKING:
     from cairn.controller.kritt import KrittView
-
-
-def _relative_path(value: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError("source path must be a string")
-    path = PurePosixPath(value)
-    if not value or "\x00" in value or "\\" in value or path.is_absolute() or any(
-        part in {".", ".."} for part in value.split("/")
-    ) or str(path) != value:
-        raise ValueError(f"source path must be canonical and relative: {value}")
-    return value
-
-
-def _source_files(repo: Path, deadline: float | None = None,
-                  cancellation: TaskCancellation | None = None) -> dict[str, str]:
-    files = {}
-    for directory, dirs, names in os.walk(repo, followlinks=False):
-        check_control(deadline, cancellation)
-        for name in dirs + names:
-            check_control(deadline, cancellation)
-            path = Path(directory) / name
-            if path.is_symlink():
-                raise ValueError(f"source symlinks are not supported: {path.relative_to(repo)}")
-        for name in sorted(names):
-            check_control(deadline, cancellation)
-            path = Path(directory) / name
-            if not path.is_file():
-                raise ValueError(f"source contains a non-regular file: {path.relative_to(repo)}")
-            relative = _relative_path(path.relative_to(repo).as_posix())
-            digest = hashlib.sha256()
-            with path.open("rb") as stream:
-                while True:
-                    check_control(deadline, cancellation)
-                    chunk = stream.read(1024 * 1024)
-                    check_control(deadline, cancellation)
-                    if not chunk:
-                        break
-                    digest.update(chunk)
-            files[relative] = digest.hexdigest()
-    check_control(deadline, cancellation)
-    return files
 
 
 def verify_source(repo: Path, view: KrittView, manifest: Path | None, *, deadline: float | None = None,
@@ -117,45 +78,6 @@ def verify_source(repo: Path, view: KrittView, manifest: Path | None, *, deadlin
         "archive_sha256": data["archive_sha256"], "tracked_count": data["tracked_count"],
         "path_aliases": aliases, "path_mappings": mappings,
     })
-
-
-def assert_source_unchanged(repo: Path, baseline: dict, *, deadline: float | None = None,
-                             cancellation: TaskCancellation | None = None) -> None:
-    check_control(deadline, cancellation)
-    repo = repo.resolve(strict=True)
-    info = baseline["source_manifest"]
-    if hashlib.sha256(Path(info["path"]).read_bytes()).hexdigest() != info["sha256"]:
-        raise ValueError("source manifest changed after preparation")
-    check_control(deadline, cancellation)
-    if _source_files(repo, deadline, cancellation) != baseline["files"]:
-        raise ValueError("source files changed after preparation")
-
-
-def normalize_source_path(repo: Path, baseline: dict, raw_path: str) -> str:
-    """Only declared aliases and packaging mappings can rewrite a source path."""
-    repo = repo.resolve(strict=True)
-    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path or "\\" in raw_path:
-        raise ValueError("invalid source evidence path")
-    path = PurePosixPath(raw_path)
-    if path.is_absolute():
-        if str(path) != raw_path or ".." in path.parts:
-            raise ValueError("source evidence path must be canonical")
-        local = Path(raw_path)
-        if local.is_relative_to(repo):
-            relative = local.relative_to(repo).as_posix()
-        else:
-            aliases = baseline["source_manifest"]["path_aliases"]
-            alias = next((value for value in sorted(aliases, key=len, reverse=True) if raw_path.startswith(value + "/")), None)
-            if alias is None:
-                raise ValueError(f"source evidence path is outside the source directory: {raw_path}")
-            relative = raw_path[len(alias) + 1:]
-    else:
-        relative = raw_path
-    relative = _relative_path(relative)
-    relative = baseline["source_manifest"]["path_mappings"].get(relative, relative)
-    if relative not in baseline["files"]:
-        raise ValueError(f"source evidence file is absent from the manifest: {raw_path}")
-    return relative
 
 
 def check_observation(repo: Path, baseline: dict, path: str, start_line: int, end_line: int, quotation: str) -> EvidenceReference:

@@ -10,7 +10,7 @@
 - 需要探索/验证：{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"明确可验证方向"}]}}
 - 有足够正在执行的方向：{"accepted":true,"data":{}}
 
-最多提出 {max_intents} 个互不重叠方向。Open Intents 为空且目标未满足时必须提出方向；不能把重复规划当成进展。只作判断，不执行新的实验、不写源码、不直接调用 Cairn API。完成仍需独立验收，当前 CP3 不具备完成申请/批准能力。
+最多提出 {max_intents} 个互不重叠方向。Open Intents 为空且目标未满足时必须提出方向；不能把重复规划当成进展。只作判断，不执行新的实验、不写源码、不直接调用 Cairn API。Complete 仅提交完成申请，由独立终审批准后才能完成项目。
 
 ## Graph
 {graph_yaml}

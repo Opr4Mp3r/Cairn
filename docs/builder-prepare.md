@@ -1,10 +1,18 @@
-# Builder：准备审计方案（R-CP1 中间态）
+# Builder：Kritt 取材与 audit 研究（R-CP2 中间态）
 
-2026-10-10：工作区已完成 [v0.5](specs/kritt-audit-reconnect-mvp.md) 的 R-CP1 开发，并获用户提交授权。Builder 通过同一 harness session 自主查询 Kritt、读取源码并生成 AuditPlan；R-CP2 的 audit 初始化、监督和研究尚未接通。
+2026-10-10：按 [v0.5](specs/kritt-audit-reconnect-mvp.md) 接回 audit。R-CP1、R-CP2 已验收通过；R-CP2 已获用户提交授权，R-CP3 的完整结案交付未开发。
 
-当前 `cairn builder` 命令生成方案后打印 `plan_ready` 和产物路径，然后以非零退出码明确提示“audit 接回尚未完成”。不会启动 Server、Dispatcher 或创建 generic 项目。开发验收直接使用 `run_builder()`，其成功结果为 `plan_ready`。完整运行脚本见本地 R-CP1 交接材料。
+当前 `cairn builder` 会在同一 harness session 中取材，生成 AuditPlan，复用独立目标预审与种子复核，再创建并激活 audit 项目，启动 Dispatcher 与旁路 Controller monitor。普通项目和旧源码型 audit 入口保留。模型只按需读取源码、参考资料和材料文件，完整源码指纹由程序核验。
 
-下面保留 v0.3 已交付版本的历史准备、研究与结果说明；其中“自动启动研究”和 completed 描述不适用于本次 R-CP1 中间态。现有源码型 audit 入口及普通项目仍可单独使用。
+使用新版 `dispatch.builder.example.yaml`，或在原本地配置中补上已有字段 `controller.research_prompt_group: audit`；`runtime.prompt_group` 仍为 default。缺少审计研究提示组时在启动 Builder 调用前报错。
+
+示例沿用已有单次时限字段，构建300秒、预审/种子复核240秒、Overseer180秒；按实际模型耗时调整。它们不是阶段累计预算，研究/收尾仍使用已有audit绝对期限。
+
+运行命令及 target/源码/manifest/DSN 准备方式不变；无需手动启动服务。终端提供本次 Server、project_url、project_id、数量和 audit_phase，图页面沿用已有 UI。draining 期间继续等待收尾；用户可停止项目或按 Ctrl+C。R-CP2 仍使用已有 result.json、graph.yaml、timeline.txt；新增完整 audit/completions 归档和交付验收属于 R-CP3，当前阶段不能宣称已经完成。
+
+同一 Builder 接收预审问题后续接原 session，审核角色独立新建 session。种子不因既有标签成为已确认前提，证据不足仍可启动验证研究；Complete 仅申请，项目 completed 只能来自独立批准。budget_exhausted 不表示无漏洞。参考资料只保存一次，查询回执和完整 get 材料在本次目录中保留。
+
+下文保留 v0.3 已交付的历史准备与结果说明，用于兼容已有 generic 结果。其“普通研究”“没有总预算”“不调用复核”等描述不适用于本次 audit 入口。当前能力和交付边界以上述 R-CP2 说明及 v0.5 为准。
 
 ## 首次准备
 

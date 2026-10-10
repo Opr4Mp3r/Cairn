@@ -217,8 +217,9 @@ def kritt_probe(config_path: Path, target_name: str, goal: str, scan_id: int | N
 @click.option("--run-dir", type=click.Path(file_okay=False, path_type=Path), required=True)
 @click.option("--view", "view_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Explicit offline fixture; otherwise read PostgreSQL")
 def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
-    """准备 AuditPlan；R-CP1 阶段尚未接通 audit 研究。"""
+    """从 Kritt 准备 AuditPlan，启动 audit 研究与独立监督。"""
     from cairn.controller.builder import run_builder
+    from cairn.controller.research import run_research
     from cairn.controller.local import stop_agent_groups
     from cairn.dispatcher.config import DispatchConfig
     from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -249,10 +250,15 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
     previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         config = DispatchConfig.load(config_path)
+        if config.controller is None or not config.controller.research_prompt_group:
+            raise ValueError("Builder audit requires controller.research_prompt_group; use the updated Builder example.")
         prepared = run_builder(config, target_name=target_name, user_goal=goal,
                              run_dir=folder, scan_id=scan_id, view_path=view_path, ask=reply, cancellation=token)
-        click.echo(json.dumps(prepared, ensure_ascii=False))
-        raise click.ClickException("R-CP1 已生成审计方案；audit 接回尚未完成，未创建或启动研究项目。")
+        result = run_research(config, prepared, ask=reply, cancellation=token,
+                              report=lambda event: click.echo(json.dumps(event, ensure_ascii=False)))
+        click.echo(json.dumps(result, ensure_ascii=False))
+        if result.get("export_error"):
+            raise click.ClickException(f"研究结果导出失败：{result['export_error']}")
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -306,7 +312,7 @@ def audit(config_path: Path, repo: Path | None, goal: str | None, project_id: st
         config = DispatchConfig.load(config_path)
         root = Path(config.local.workspace_root if config.local and config.local.workspace_root else "datas/audit-workspaces").expanduser()
         root = root.resolve() if root.is_absolute() else (config_path.resolve().parent / root).resolve()
-        backend = LocalBackend(LocalConfig(workspace_root=str(root)))
+        backend = LocalBackend((config.local or LocalConfig()).model_copy(update={"workspace_root": str(root)}))
         client = CairnClient(config.server)
 
         def terminate(_signum, _frame):

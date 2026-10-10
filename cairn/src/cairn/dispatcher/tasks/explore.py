@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 
 from cairn.dispatcher.config import DispatchConfig, WorkerConfig
@@ -95,9 +96,11 @@ def run_explore_task(
                     container_name,
                     export_yaml.strip(),
                     phase="explore_execute",
+                    audit=project.project.mode == "audit",
                 ),
                 "intent_id": intent.id,
                 "intent_description": intent.description,
+                "intent_sources": json.dumps(intent.from_, ensure_ascii=False),
             },
         )
 
@@ -296,12 +299,7 @@ def _try_conclude_fallback(
     prompt = research_prompt(
         config, project, "explore_conclude.md",
         {
-            "graph_yaml": write_graph_snapshot_reference(
-                container_manager,
-                container_name,
-                export_yaml.strip(),
-                phase="explore_conclude",
-            ),
+            "graph_yaml": "",
             "intent_id": intent.id,
             "intent_description": intent.description,
         },

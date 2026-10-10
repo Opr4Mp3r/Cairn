@@ -5,6 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from cairn.audit_inputs import agent_graph_yaml
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.protocol.client import CairnClient
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -58,14 +59,15 @@ def write_graph_snapshot_reference(
     graph_yaml: str,
     *,
     phase: str,
+    audit: bool = False,
 ) -> str:
     path = f"{GRAPH_SNAPSHOT_ROOT}/{phase}-{uuid.uuid4().hex[:12]}/graph.yaml"
-    container_manager.write_text_file(container_name, path, graph_yaml)
+    container_manager.write_text_file(container_name, path, agent_graph_yaml(graph_yaml) if audit else graph_yaml)
     return (
-        "The graph YAML snapshot is stored in this file inside the current container:\n\n"
+        "The graph YAML snapshot is stored in this task file:\n\n"
         f"{path}\n\n"
-        "Before using the graph, read the entire file and treat its contents as the YAML snapshot "
-        "for this Graph section."
+        + ("Read the facts, premises and hints related to the Current Intent; search this snapshot as needed."
+           if phase.startswith("explore") else "Read this snapshot to assess the overall research graph.")
     )
 
 

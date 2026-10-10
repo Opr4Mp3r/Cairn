@@ -1,4 +1,4 @@
-# 正向MVP：Builder取材和构图 → 普通Cairn研究 → 保存结果。
+# R-CP2：Builder取材与AuditPlan → audit研究与独立监督；完整交付待R-CP3。
 server: "http://127.0.0.1:0"
 runtime:
   execution: local
@@ -26,12 +26,16 @@ workers:
     max_running: 1
     priority: 0
 controller:
+  research_prompt_group: audit
   roles:
     builder: claude-main
-    # 沿用Cairn通用配置格式；本入口不调用reviewer。
+    # 预审、种子复核和Overseer使用独立session。
     reviewer: claude-main
   timeouts:
     build: 300
+    preflight: 240
+    seed_review: 240
+    overseer: 180
   kritt:
     dsn_env: CAIRN_KRITT_READONLY_DSN
     targets:

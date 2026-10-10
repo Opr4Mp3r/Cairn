@@ -161,13 +161,20 @@ def test_invalid_output_has_one_repair_in_the_same_session(prepared, monkeypatch
     assert not (other[-1] / "plan.json").exists()
 
 
-def test_cli_explicitly_stops_after_plan_before_generic_import(prepared, monkeypatch):
-    _, config_path, view, folder = prepared
-    monkeypatch.setattr("cairn.controller.research.run_research",
-                        lambda *args, **kwargs: pytest.fail("AuditPlan must not enter generic research"))
+def test_cli_hands_audit_plan_to_research_without_new_product_flags(prepared, monkeypatch):
+    config, config_path, view, folder = prepared
+    config.controller.research_prompt_group = "audit"
+    config_path.write_text(config.model_dump_json())
+    received = []
+    def research(config, ready, **kwargs):
+        AuditPlan.model_validate(json.loads(Path(ready["plan"]).read_text()))
+        assert kwargs["ask"] and kwargs["cancellation"]
+        received.append(ready)
+        return {"status": "stopped", "run_dir": ready["run_dir"]}
+    monkeypatch.setattr("cairn.controller.research.run_research", research)
     result = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
                                      "--goal", "读取源码", "--run-dir", str(folder), "--view", str(view)])
-    assert result.exit_code != 0 and "audit 接回尚未完成" in result.output
+    assert result.exit_code == 0 and len(received) == 1
     assert (folder / "plan.json").exists() and not (folder / "cairn.db").exists()
     rejected = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
                                        "--goal", "读取源码", "--run-dir", str(folder) + "-2", "--prepare-only"])

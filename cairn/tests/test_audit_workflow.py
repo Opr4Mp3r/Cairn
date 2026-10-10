@@ -206,7 +206,7 @@ def test_preflight_rejection_does_not_create_a_project(api, tmp_path, monkeypatc
     assert list((tmp_path / "work/controller").rglob("result.json"))
 
 
-def test_goal_revision_uses_new_sessions_and_preserves_user_goal(api, tmp_path, monkeypatch):
+def test_goal_revision_continues_builder_but_keeps_independent_reviewers(api, tmp_path, monkeypatch):
     client, _http = api
     repo, config = repository(tmp_path), configuration(tmp_path)
     config.controller.max_goal_revisions = 1
@@ -214,7 +214,9 @@ def test_goal_revision_uses_new_sessions_and_preserves_user_goal(api, tmp_path, 
     result = create(config, client, repo)
     audit = client.get_audit(result["project_id"])
     assert audit.user_goal == "trace anonymous entry"
-    assert len({record.session for record in audit.records}) == 5
+    assert len({record.session for record in audit.records}) == 4
+    builders = [record.session for record in audit.records if record.phase == "build"]
+    assert len(builders) == 2 and builders[0] == builders[1]
     assert [record.decision for record in audit.records if record.phase == "preflight"] == ["rejected", "approved"]
 
 

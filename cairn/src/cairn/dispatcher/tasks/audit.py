@@ -9,7 +9,8 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
 from cairn.dispatcher.config import DispatchConfig
-from cairn.audit_evidence import repository_baseline, source_evidence
+from cairn.audit_evidence import source_evidence, assert_repository_unchanged
+from cairn.audit_inputs import baseline_identity, material_paths
 from cairn.dispatcher.contracts import parse_json_output, validate_explore_payload, validate_reason_payload
 from cairn.dispatcher.output_parser import FENCED_BLOCK_RE
 from cairn.dispatcher.prompting import load_prompt, render_prompt
@@ -62,12 +63,13 @@ def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, r
     supported = supported_fact_ids(project)
     context = {
         "repo_path": metadata.repo_path, "policy": metadata.policy,
-        "baseline": {key: metadata.baseline.get(key) for key in ("git_commit", "digest")},
+        "baseline": baseline_identity(metadata.baseline),
+        "materials": material_paths(Path(metadata.workspace_path)) if metadata.workspace_path else {},
         "verified_fact_ids": supported,
         "unverified_or_refuted": [fact.id for fact in project.facts if fact.id not in {"origin", "goal", *supported}],
     }
     return render_prompt(load_prompt(config.controller.research_prompt_group, name),
-                         {**replacements, "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
+                         {"intent_sources": "[]", **replacements, "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
 
 
 def supported_fact_ids(project: ProjectDetail) -> list[str]:
@@ -97,8 +99,10 @@ def research_workspace(config: DispatchConfig, client, backend, project: Project
         files = metadata.baseline.get("files")
         if not isinstance(files, dict) or not files:
             raise ValueError("baseline source fingerprints are missing")
-        if repository_baseline(repo, Path(metadata.workspace_root))["files"] != files:
-            raise ValueError("baseline_changed before research")
+        try:
+            assert_repository_unchanged(repo, metadata.baseline, Path(metadata.workspace_root))
+        except ValueError as exc:
+            raise ValueError(f"baseline_changed before research: {exc}") from exc
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         try:
             response = client.set_project_status(project.project.id, "stopped")
@@ -134,7 +138,7 @@ def explore_result(project: ProjectDetail, payload: dict) -> tuple[str, str | No
     metadata = project.project.audit
     assert metadata is not None
     repo = Path(metadata.repo_path)
-    fact.audit.evidence = source_evidence(repo, fact.audit.evidence)
+    fact.audit.evidence = source_evidence(repo, fact.audit.evidence, metadata.baseline)
     for reference in fact.audit.evidence:
         if "files" in metadata.baseline and metadata.baseline["files"].get(reference.path) != reference.sha256:
             raise ValueError(f"baseline_changed or source not snapshotted: {reference.path}")

@@ -10,6 +10,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cairn.audit_evidence import source_evidence
+from cairn.audit_inputs import agent_view, material_paths, READING_GUIDANCE
 from cairn.controller.app import call_agent
 from cairn.controller.audit import _require_ok
 from cairn.dispatcher.config import DispatchConfig
@@ -67,12 +68,17 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
     workspace = Path(research_workspace(config, client, backend, project))
     folder = workspace / "controller-reviews" / f"{phase}-{uuid.uuid4().hex}"
     folder.mkdir(parents=True)
-    payload = {**context, "repo_path": project.project.audit.repo_path,
+    payload = {**agent_view(context), "repo_path": project.project.audit.repo_path,
+               "materials": material_paths(workspace),
                "output_schema": model.model_json_schema(by_alias=True)}
     if phase == "overseer" and "audit" in context["target"]:
+        payload["unsupported_premise_ids"] = [
+            fact_id for fact_id, fact in context.get("premises", {}).items()
+            if fact["audit"]["review_status"] != "verified"
+        ]
         try:
             data = AuditFactData.model_validate(context["target"]["audit"])
-            checked = source_evidence(Path(project.project.audit.repo_path), data.evidence)
+            checked = source_evidence(Path(project.project.audit.repo_path), data.evidence, project.project.audit.baseline)
             fixed = project.project.audit.baseline.get("files", {})
             if not checked or any(fixed.get(ref.path) != ref.sha256 for ref in checked):
                 raise ValueError("引用不足或未纳入固定基线，不能据此确认")
@@ -80,6 +86,7 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
         except (OSError, ValueError, RuntimeError) as exc:
             payload["reference_check"] = {"status": "needs_evidence", "error": str(exc)}
     instruction = resources.files("cairn.controller").joinpath(f"prompts/{phase}.md").read_text(encoding="utf-8")
+    instruction += "\n" + READING_GUIDANCE
     prompt = instruction + "\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     (folder / "input.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     try:

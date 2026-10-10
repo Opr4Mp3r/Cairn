@@ -110,6 +110,7 @@ def run_reason_task(
                     container_name,
                     export_yaml.strip(),
                     phase="reason_execute",
+                    audit=project.project.mode == "audit",
                 ),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
                 "open_intents": format_open_intents(open_intents),

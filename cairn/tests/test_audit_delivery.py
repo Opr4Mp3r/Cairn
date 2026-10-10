@@ -72,7 +72,9 @@ def test_three_process_delivery_finishes_and_reaps_children(delivery, monkeypatc
     assert set(summary["processes"]) == {"server", "controller", "dispatcher"}
     assert (run / "graph.yaml").is_file() and (run / "cairn.db").is_file()
     records = audit["records"]
-    assert {"build", "preflight", "seed_review", "overseer", "final_review" if outcome == "success" else "closing"} <= {record["phase"] for record in records}
+    phases = {record["phase"] for record in records}
+    assert {"build", "preflight", "overseer", "final_review" if outcome == "success" else "closing"} <= phases
+    assert "seed_review" not in phases  # This fixture has no initial seeds to review.
     assert any(fact.get("audit", {}).get("evidence") for fact in project["facts"])
     sessions = [record["session"] for record in records]
     assert len(set(sessions)) == len(sessions)

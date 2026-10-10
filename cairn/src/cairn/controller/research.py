@@ -1,4 +1,4 @@
-"""Import a Builder plan and run the existing generic Cairn research loop."""
+"""Run prepared audit plans, preserving the previously delivered generic importer."""
 from __future__ import annotations
 
 import json
@@ -12,6 +12,9 @@ import time
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cairn.controller.kritt_query import write_json as _write
+from cairn.controller.audit import AuditPlan, prepare_audit
+from cairn.controller.builder import continue_builder
+from cairn.controller.models import AgentCallResult
 from cairn.controller.local import CLI, start_server, stop_processes
 from cairn.dispatcher.config import DispatchConfig, LocalConfig
 from cairn.dispatcher.protocol.client import CairnClient
@@ -84,6 +87,54 @@ def import_plan(client: CairnClient, backend: LocalBackend, prepared: dict) -> d
     return result
 
 
+def import_audit_plan(config, client, backend, prepared, *, ask=None, cancellation=None) -> dict:
+    folder = Path(prepared["run_dir"])
+    repo = Path(prepared["source_root"]).resolve(strict=True)
+    plan = AuditPlan.model_validate(json.loads(Path(prepared["plan"]).read_text()))
+    baseline = json.loads(Path(prepared["source_baseline"]).read_text())
+    controller_run = folder / "controller" / "prepare"
+    receipts, known_calls = [], set()
+
+    def add_builder_receipts():
+        for directory in sorted(folder.glob("call-*")):
+            artifact = directory / "result.json"
+            if artifact in known_calls or not artifact.exists():
+                continue
+            called = AgentCallResult.model_validate_json(artifact.read_text())
+            payload = json.loads((directory / "input.json").read_text())
+            receipts.append((called.phase, payload, called, artifact))
+            known_calls.add(artifact)
+
+    research_context = {key: prepared[key] for key in ("scan_id", "commit_sha", "repo_full", "source_root", "user_goal")}
+    research_path = folder / "research-context.json"
+    _write(research_path, {**research_context, "goal": plan.goal})
+    context = {
+        "repo_path": str(repo), "workspace_root": config.local.workspace_root,
+        "user_goal": prepared["user_goal"], "baseline": baseline,
+        "requirements_path": prepared["requirements"], "references_path": prepared["references"],
+        "reference_paths": [entry["path"] for entry in json.loads(Path(prepared["references"]).read_text())],
+        "plan_path": prepared["plan"], "project_path": str(folder / "project.json"),
+        "materials": {"kritt-materials.json": prepared["materials"], "references.json": prepared["references"],
+                      "requirements.json": prepared["requirements"], "query-receipts.json": str(folder / "query-receipts.json"),
+                      "research-context.json": str(research_path)},
+    }
+    add_builder_receipts()
+
+    def revise(current, issues):
+        continue_builder(config, prepared, current_plan=current, preflight_issues=issues,
+                         ask=ask, cancellation=cancellation)
+        add_builder_receipts()
+        revised = AuditPlan.model_validate(json.loads(Path(prepared["plan"]).read_text()))
+        _write(research_path, {**research_context, "goal": revised.goal})
+        return revised
+
+    result = prepare_audit(config, client, backend, plan=plan, context=context, run_dir=controller_run,
+                           revise=revise, receipts=receipts, cancellation=cancellation)
+    result["source_root"] = str(repo)
+    _write(folder / "project.json", result)
+    return result
+
+
 def save_results(client: CairnClient, project_id: str, folder: Path) -> dict[str, str]:
     project = client.get_project(project_id)
     paths = {"project": folder / "result.json", "graph": folder / "graph.yaml",
@@ -95,7 +146,7 @@ def save_results(client: CairnClient, project_id: str, folder: Path) -> dict[str
 
 
 def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCancellation | None = None,
-                 report=lambda event: None) -> dict:
+                 report=lambda event: None, ask=None) -> dict:
     """Own a local Server, import the graph, then start the existing Dispatcher."""
     if config.runtime.execution != "local":
         raise ValueError("Builder research requires local execution")
@@ -103,6 +154,7 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
     local = config.local or LocalConfig()
     config.local = local
     folder = Path(prepared["run_dir"]).resolve()
+    audit_run = "policy" in json.loads(Path(prepared["plan"]).read_text())
     registry = folder / "agent-processes"
     token = cancellation or TaskCancellation()
     processes, logs = {}, []
@@ -136,9 +188,14 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
         state.update(server=config.server, database=str(folder / "cairn.db"))
         client = CairnClient(config.server, trust_env=False)
         backend = LocalBackend(config.local)
-        state.update(import_plan(client, backend, prepared))
+        if audit_run:
+            state.update(import_audit_plan(config, client, backend, prepared, ask=ask, cancellation=token))
+        else:
+            state.update(import_plan(client, backend, prepared))
         state["project_url"] = f"{config.server}/#/projects/{state['project_id']}"
         state["status"] = "researching"
+        if audit_run:
+            spawn("controller", ["audit", "--project", state["project_id"], "--config", str(effective)])
         dispatcher = spawn("dispatcher", ["dispatch", "--config", str(effective)])
         _write(folder / "research.json", state)
         last_progress = None
@@ -151,15 +208,25 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
                 "fact_count": sum(fact.id not in {"origin", "goal"} for fact in project.facts),
                 "open_intent_count": sum(intent.to is None for intent in project.intents),
             }
+            if project.project.audit is not None:
+                progress["audit_phase"] = project.project.audit.phase
             state.update(progress)
-            if project.project.status != "active":
+            if project.project.status not in ("active", "draining"):
                 state["status"] = project.project.status
                 return state
             if progress != last_progress:
                 _write(folder / "research.json", state)
                 report(dict(state))
                 last_progress = progress
-            if dispatcher.poll() is not None:
+            ended = [name for name in ("controller", "dispatcher")
+                     if name in processes and processes[name].poll() is not None]
+            if ended:
+                current = client.get_project(state["project_id"])
+                if current.project.status not in ("active", "draining"):
+                    state["status"] = current.project.status
+                    return state
+                if "controller" in ended:
+                    raise RuntimeError("Audit monitor exited before project termination; see controller.log")
                 raise RuntimeError("Dispatcher exited; see dispatcher.log")
             time.sleep(.2)
     except BaseException as exc:
@@ -170,7 +237,12 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
             if "project_id" not in state and locator.exists():
                 state["project_id"] = json.loads(locator.read_text())["project_id"]
             if "project_id" in state:
-                client.set_project_status(state["project_id"], "stopped")
+                try:
+                    response = client.set_project_status(state["project_id"], "stopped")
+                    if not response.ok:
+                        state["stop_error"] = f"{response.status_code}: {response.text}"
+                except Exception as stop_error:
+                    state["stop_error"] = f"{type(stop_error).__name__}: {stop_error}"
         raise
     finally:
         previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGTERM, signal.SIGINT)}

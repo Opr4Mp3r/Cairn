@@ -100,11 +100,11 @@ def test_explore_early_plain_text_exit_uses_conclude_fallback(monkeypatch) -> No
 
     assert outcome == "success"
     assert client.concluded == [("proj_001", "i001", "test-worker", "confirmed fact")]
-    assert len(containers.writes) == 2
+    assert len(containers.writes) == 1
     assert "/explore_execute-" in containers.writes[0][1]
-    assert "/explore_conclude-" in containers.writes[1][1]
     assert len(driver.execute_prompts) == 1
     assert len(driver.conclude_prompts) == 1
+    assert "/explore_conclude-" not in driver.conclude_prompts[0]
     assert lease.started and lease.stopped
 
 
