@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from contextlib import suppress
 
 from cairn.dispatcher.runtime.process import ProcessResult
@@ -17,6 +18,7 @@ LOG = logging.getLogger(__name__)
 READ_CHUNK_SIZE = 65536
 STREAM_JOIN_TIMEOUT_SECONDS = 5.0
 FORCE_KILL_REAP_TIMEOUT_SECONDS = 2.0
+PROGRESS_INTERVAL_SECONDS = 15.0
 
 
 class LocalProcess:
@@ -83,11 +85,24 @@ class LocalProcess:
     def communicate(self, timeout: float | None) -> ProcessResult:
         assert self._process is not None
         wait_for = float(self._timeout_seconds) if self._timeout_seconds is not None else timeout
-        try:
-            self._process.wait(timeout=wait_for)
-        except subprocess.TimeoutExpired:
-            self._timed_out = True
-            self._terminate()
+        started = time.monotonic()
+        deadline = None if wait_for is None else started + wait_for
+        while True:
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            window = PROGRESS_INTERVAL_SECONDS if remaining is None else min(PROGRESS_INTERVAL_SECONDS, remaining)
+            try:
+                self._process.wait(timeout=window)
+                break
+            except subprocess.TimeoutExpired:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    self._timed_out = True
+                    LOG.warning("Agent 进程达到时限 pid=%s elapsed=%.1fs timeout=%ss",
+                                self._process.pid, now - started, wait_for)
+                    self._terminate()
+                    break
+                LOG.info("Agent 进程仍在运行 pid=%s elapsed=%.1fs timeout=%s",
+                         self._process.pid, now - started, "无" if wait_for is None else f"{wait_for:g}s")
         with suppress(subprocess.TimeoutExpired):
             self._process.wait(timeout=FORCE_KILL_REAP_TIMEOUT_SECONDS)
         if self._stdout_thread is not None:

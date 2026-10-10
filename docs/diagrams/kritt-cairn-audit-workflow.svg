@@ -1,0 +1,185 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1850" viewBox="0 0 2000 1850">
+<rect width="100%" height="100%" fill="#FBFCFE"/>
+<text x="42" y="45" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="39" font-weight="600" fill="#233447">Kritt × Cairn 审计工作流程</text>
+<text x="42" y="94" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">v0.5 目标架构 · 接回尚未实现</text>
+<rect x="330" y="275" width="1615" height="1490" rx="20" fill="#FFFFFF" stroke="#AEBFCD" stroke-width="1.6" stroke-dasharray="7 6"/>
+<text x="355" y="304" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">CAIRN  ·  内部工作流程</text>
+<rect x="360" y="350" width="1545" height="400" rx="20" fill="#F7FAFD" stroke="#D6E1E9" stroke-width="1.6" stroke-dasharray="7 6"/>
+<text x="385" y="379" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">1  开题与独立准备</text>
+<rect x="360" y="895" width="955" height="500" rx="20" fill="#F4F9FC" stroke="#D6E1E9" stroke-width="1.6" stroke-dasharray="7 6"/>
+<text x="385" y="924" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">2  主研究循环  ·  Dispatcher 调度</text>
+<rect x="1360" y="895" width="545" height="785" rx="20" fill="#F9F6FC" stroke="#D2C3DE" stroke-width="1.6" stroke-dasharray="7 6"/>
+<text x="1385" y="924" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">3  旁路 Controller monitor</text>
+<rect x="360" y="1450" width="955" height="230" rx="20" fill="#FCFAF4" stroke="#DFD2B9" stroke-width="1.6" stroke-dasharray="7 6"/>
+<text x="385" y="1479" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">4  预算与只读收尾  ·  Controller 驱动</text>
+<rect x="680" y="145" width="270" height="95" rx="15" fill="#EEF4FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="815.0" y="176.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">用户自然语言需求</text>
+<text x="815.0" y="208.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">必要时在原会话补充</text>
+<rect x="1010" y="145" width="350" height="95" rx="15" fill="#EFF6F1" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="1185.0" y="176.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">源码与参考资料</text>
+<text x="1185.0" y="208.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">官方安全 / 部署文档</text>
+<rect x="40" y="449" width="245" height="147" rx="0" fill="#EAF1F8" stroke="#AFC2D3" stroke-width="1.6"/>
+<ellipse cx="162.5" cy="449" rx="122.5" ry="19" fill="#EAF1F8" stroke="#AFC2D3" stroke-width="1.6"/>
+<path d="M 40 596 A 122.5 19 0 0 0 285 596" fill="none" stroke="#AFC2D3" stroke-width="1.6"/>
+<text x="162.5" y="483.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="26" font-weight="600" fill="#233447">Kritt 数据库</text>
+<text x="162.5" y="514.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="21" font-weight="400" fill="#5A6A79">PostgreSQL</text>
+<text x="162.5" y="545.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#5A6A79">入口 · Flow · Findings</text>
+<text x="162.5" y="576.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#5A6A79">历史复核 / 元数据</text>
+<rect x="390" y="450" width="230" height="105" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="505.0" y="486.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">只读取材</text>
+<text x="505.0" y="518.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#5A6A79">固定 scan / 本地查询</text>
+<rect x="680" y="450" width="270" height="105" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="815.0" y="486.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">Builder Agent</text>
+<text x="815.0" y="518.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">同一 session 自主取材</text>
+<rect x="1010" y="410" width="350" height="180" rx="15" fill="#FFF4DB" stroke="#D7BB80" stroke-width="1.6"/>
+<text x="1185.0" y="453.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">威胁模型 + Goal / Policy</text>
+<text x="1185.0" y="484.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="21" font-weight="400" fill="#5A6A79">官方依据 / 推导 / 未知</text>
+<text x="1185.0" y="515.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">部署 · 身份 · 范围 · CVSS</text>
+<text x="1185.0" y="546.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">用户约束与待证事实分开</text>
+<rect x="1430" y="420" width="430" height="110" rx="15" fill="#F0EAF7" stroke="#C7B4DB" stroke-width="1.6"/>
+<text x="1645.0" y="443.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">① 独立目标预审</text>
+<text x="1645.0" y="475.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">防歧义、目标钻空子</text>
+<text x="1645.0" y="507.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">有问题 → 回 Builder 有限修订</text>
+<rect x="1010" y="635" width="350" height="70" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="1185.0" y="670.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="22" font-weight="600" fill="#233447">种子 Facts + 初始 Intents</text>
+<rect x="1430" y="590" width="430" height="105" rx="15" fill="#F0EAF7" stroke="#C7B4DB" stroke-width="1.6"/>
+<text x="1645.0" y="610.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">② 种子独立复核</text>
+<text x="1645.0" y="642.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">核对证据、路径与权限</text>
+<text x="1645.0" y="674.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">证据不足保留待验证</text>
+<rect x="390" y="780" width="1475" height="58" rx="15" fill="#FFF6E3" stroke="#D7BB80" stroke-width="1.6"/>
+<text x="1127.5" y="809.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="23" font-weight="600" fill="#233447">固定 Policy 贯穿全程：目标效果 · 部署 · 攻击者能力 · 信任边界 · CVSS · 证据要求</text>
+<rect x="390" y="970" width="260" height="95" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="520.0" y="1001.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">创建并激活 audit</text>
+<text x="520.0" y="1033.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#5A6A79">导入种子与研究 Intents</text>
+<rect x="695" y="970" width="260" height="95" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="825.0" y="1001.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">Dispatcher</text>
+<text x="825.0" y="1033.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">派发研究任务</text>
+<rect x="1000" y="970" width="270" height="95" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="1135.0" y="1001.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">Explore</text>
+<text x="1135.0" y="1033.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">按 Intent 探索源码</text>
+<rect x="875" y="1170" width="350" height="110" rx="15" fill="#E7F3F1" stroke="#9ABFB9" stroke-width="1.6"/>
+<text x="1050.0" y="1209.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">共享 Fact–Intent 图</text>
+<text x="1050.0" y="1241.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">证据 · 条件 · 前提 · 状态</text>
+<rect x="425" y="1170" width="290" height="110" rx="15" fill="#EAF3FA" stroke="#B9CBD9" stroke-width="1.6"/>
+<text x="570.0" y="1209.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">Reason</text>
+<text x="570.0" y="1241.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">安排方向 / 提交完成申请</text>
+<rect x="1400" y="970" width="465" height="130" rx="15" fill="#F0EAF7" stroke="#BFA9D3" stroke-width="1.6"/>
+<text x="1632.5" y="1003.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="26" font-weight="600" fill="#233447">③ Overseer 旁路监督</text>
+<text x="1632.5" y="1035.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="21" font-weight="400" fill="#5A6A79">新 Fact / 前提：证据与条件</text>
+<text x="1632.5" y="1067.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="21" font-weight="400" fill="#5A6A79">新 Intent：范围与目标漂移</text>
+<rect x="1400" y="1310" width="465" height="115" rx="15" fill="#F0EAF7" stroke="#BFA9D3" stroke-width="1.6"/>
+<text x="1632.5" y="1335.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="26" font-weight="600" fill="#233447">④ 独立完成验收</text>
+<text x="1632.5" y="1367.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">固定 Policy + 证据闭包 + CVSS</text>
+<text x="1632.5" y="1399.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">研究者不能自行批准</text>
+<rect x="390" y="1510" width="260" height="115" rx="15" fill="#FBF0DA" stroke="#D7BD8B" stroke-width="1.6"/>
+<text x="520.0" y="1535.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="24" font-weight="600" fill="#233447">研究预算到期</text>
+<text x="520.0" y="1567.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">draining：停止新派发</text>
+<text x="520.0" y="1599.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">在途任务限时收尾</text>
+<rect x="785" y="1510" width="270" height="115" rx="15" fill="#FBF0DA" stroke="#D7BD8B" stroke-width="1.6"/>
+<text x="920.0" y="1535.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="23" font-weight="600" fill="#233447">Closing 只读结案</text>
+<text x="920.0" y="1567.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">从最终图整理已有候选</text>
+<text x="920.0" y="1599.5" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">不发起新探索</text>
+<rect x="1400" y="1525" width="215" height="100" rx="15" fill="#E5F3EA" stroke="#8DB6A1" stroke-width="1.6"/>
+<text x="1507.5" y="1559.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">completed</text>
+<text x="1507.5" y="1591.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">独立终审批准</text>
+<rect x="1650" y="1525" width="215" height="100" rx="15" fill="#F9EAD9" stroke="#D2B28D" stroke-width="1.6"/>
+<text x="1757.5" y="1559.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="600" fill="#233447">budget_exhausted</text>
+<text x="1757.5" y="1591.0" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#5A6A79">预算结束，未获批准</text>
+<polyline points="815,240 815,450" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="815.0,450.0 820.5,439.0 809.5,439.0" fill="#47779B"/>
+<polyline points="1185,240 1185,410" fill="none" stroke="#77947E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1185.0,410.0 1190.5,399.0 1179.5,399.0" fill="#77947E"/>
+<polyline points="285,507 390,507" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="390.0,507.0 379.0,501.5 379.0,512.5" fill="#47779B"/>
+<polyline points="620,507 680,507" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="680.0,507.0 669.0,501.5 669.0,512.5" fill="#47779B"/>
+<polyline points="950,490 1010,490" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1010.0,490.0 999.0,484.5 999.0,495.5" fill="#47779B"/>
+<polyline points="815,555 815,670 1010,670" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1010.0,670.0 999.0,664.5 999.0,675.5" fill="#47779B"/>
+<polyline points="1360,475 1430,475" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1430.0,475.0 1419.0,469.5 1419.0,480.5" fill="#47779B"/>
+<polyline points="1645,530 1645,590" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1645.0,590.0 1650.5,579.0 1639.5,579.0" fill="#47779B"/>
+<polyline points="1360,670 1393,670 1393,642 1430,642" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1430.0,642.0 1419.0,636.5 1419.0,647.5" fill="#47779B"/>
+<polyline points="1645,695 1645,780" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1645.0,780.0 1650.5,769.0 1639.5,769.0" fill="#47779B"/>
+<polyline points="435,838 435,870 375,870 375,1017 390,1017" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="390.0,1017.0 379.0,1011.5 379.0,1022.5" fill="#47779B"/>
+<polyline points="825,838 825,890" fill="none" stroke="#A3773D" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="8 6"/>
+<polygon points="825.0,890.0 830.5,879.0 819.5,879.0" fill="#A3773D"/>
+<polyline points="1645,838 1645,890" fill="none" stroke="#A3773D" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="8 6"/>
+<polygon points="1645.0,890.0 1650.5,879.0 1639.5,879.0" fill="#A3773D"/>
+<polyline points="650,1017 695,1017" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="695.0,1017.0 684.0,1011.5 684.0,1022.5" fill="#47779B"/>
+<polyline points="955,1017 1000,1017" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1000.0,1017.0 989.0,1011.5 989.0,1022.5" fill="#47779B"/>
+<polyline points="1135,1065 1135,1170" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1135.0,1170.0 1140.5,1159.0 1129.5,1159.0" fill="#47779B"/>
+<polyline points="875,1210 715,1210" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="715.0,1210.0 726.0,1215.5 726.0,1204.5" fill="#47779B"/>
+<polyline points="630,1280 630,1313 1050,1313 1050,1280" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1050.0,1280.0 1044.5,1291.0 1055.5,1291.0" fill="#47779B"/>
+<polyline points="915,1170 915,1120 825,1120 825,1065" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="825.0,1065.0 819.5,1076.0 830.5,1076.0" fill="#47779B"/>
+<polyline points="1225,1190 1320,1190 1320,1020 1400,1020" fill="none" stroke="#85649E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="8 6"/>
+<polygon points="1400.0,1020.0 1389.0,1014.5 1389.0,1025.5" fill="#85649E"/>
+<polyline points="1400,1077 1345,1077 1345,1255 1225,1255" fill="none" stroke="#85649E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="8 6"/>
+<polygon points="1225.0,1255.0 1236.0,1260.5 1236.0,1249.5" fill="#85649E"/>
+<polyline points="500,1280 500,1375 1400,1375" fill="none" stroke="#47779B" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1400.0,1375.0 1389.0,1369.5 1389.0,1380.5" fill="#47779B"/>
+<polyline points="1560,1310 1560,1255 1345,1255" fill="none" stroke="#85649E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="8 6"/>
+<polygon points="1345.0,1255.0 1356.0,1260.5 1356.0,1249.5" fill="#85649E"/>
+<polyline points="650,1567 785,1567" fill="none" stroke="#A3773D" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="785.0,1567.0 774.0,1561.5 774.0,1572.5" fill="#A3773D"/>
+<polyline points="1055,1550 1328,1550 1328,1402 1400,1402" fill="none" stroke="#A3773D" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1400.0,1402.0 1389.0,1396.5 1389.0,1407.5" fill="#A3773D"/>
+<polyline points="1507,1425 1507,1525" fill="none" stroke="#559278" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1507.0,1525.0 1512.5,1514.0 1501.5,1514.0" fill="#559278"/>
+<polyline points="920,1625 920,1660 1757,1660 1757,1625" fill="none" stroke="#A3773D" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1757.0,1625.0 1751.5,1636.0 1762.5,1636.0" fill="#A3773D"/>
+<text x="45" y="795" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="25" font-weight="600" fill="#233447">四个介入点</text>
+<text x="45" y="860" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="22" font-weight="600" fill="#85649E">① 开题时</text>
+<text x="45" y="895" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">拦截目标歧义</text>
+<text x="45" y="970" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="22" font-weight="600" fill="#85649E">② 落图前</text>
+<text x="45" y="1005" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">核对种子前提</text>
+<text x="45" y="1080" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="22" font-weight="600" fill="#85649E">③ 研究中</text>
+<text x="45" y="1115" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">监督事实与方向</text>
+<text x="45" y="1190" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="22" font-weight="600" fill="#85649E">④ 结案时</text>
+<text x="45" y="1225" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">独立判断是否达标</text>
+<text x="1395" y="1180" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#85649E">监督为旁路：通过共享图影响研究</text>
+<text x="1395" y="1281" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="17" font-weight="400" fill="#5A6A79">剩余预算允许时继续研究</text>
+<text x="390" y="1710" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">所有 Agent 复用 Cairn harness（Claude Code / Grok Build）；审核使用独立 session。</text>
+<text x="390" y="1744" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">结束统一保存：任务图 · 时间线 · 审核记录 · 完成申请 · Agent 调用材料</text>
+<rect x="1207.0" y="302" width="86.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1250" y="315" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#77947E">按需读取</text>
+<rect x="312.0" y="475" width="50.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="337" y="488" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">只读</text>
+<rect x="1667.0" y="547" width="50.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1692" y="560" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">通过</text>
+<rect x="1163.6666666666667" y="1107" width="72.66666666666666" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1200" y="1120" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">新 Fact</text>
+<rect x="752.0" y="1176" width="86.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="795" y="1189" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">读图判断</text>
+<rect x="790.3333333333334" y="1322" width="109.33333333333333" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="845" y="1335" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">新增 Intents</text>
+<rect x="797.6666666666666" y="1080" width="118.66666666666667" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="857" y="1093" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">待研究 Intent</text>
+<rect x="1445.6666666666667" y="1121" width="138.66666666666669" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1515" y="1134" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#85649E">复核状态 + Hint</text>
+<rect x="799.0" y="1381" width="222.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="910" y="1394" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#47779B">Complete 仅提交完成申请</text>
+<rect x="1528.0" y="1211" width="174.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1615" y="1224" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#85649E">缺证据 / 驳回 → Hint</text>
+<rect x="674.0" y="1526" width="86.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="717" y="1539" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#A3773D">收尾结束</text>
+<rect x="1157.0" y="1513" width="86.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1200" y="1526" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#A3773D">已有候选</text>
+<rect x="1527.0" y="1467" width="50.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1552" y="1480" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#559278">批准</text>
+<rect x="1144.0" y="1631" width="212.0" height="26" rx="4" fill="#FBFCFE" stroke="#FBFCFE" stroke-width="1.6"/>
+<text x="1250" y="1644" text-anchor="middle" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="18" font-weight="400" fill="#A3773D">终审期限结束且未获批准</text>
+<text x="42" y="1800" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="20" font-weight="400" fill="#5A6A79">实线：主流程 / 数据流    紫色虚线：旁路监督与反馈    金色：固定约束 / 预算收尾</text>
+<text x="42" y="1830" text-anchor="start" dominant-baseline="central" font-family="Arial Unicode MS, PingFang SC, sans-serif" font-size="19" font-weight="400" fill="#5A6A79">Kritt 仅暴露数据库；源码和参考资料由 Cairn 按需读取。预算耗尽不代表证明无漏洞。</text>
+</svg>

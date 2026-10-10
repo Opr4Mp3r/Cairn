@@ -17,6 +17,7 @@ class FileReadResult(BaseModel):
 class AgentCallResult(BaseModel):
     role: str
     worker: str
+    harness: str | None = None
     phase: str
     workspace: str
     session: str | None

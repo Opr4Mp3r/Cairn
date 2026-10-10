@@ -58,6 +58,8 @@
 
 ## 3. 运行结构与会话关系
 
+配套总览图：[PNG 预览](../diagrams/kritt-cairn-audit-workflow.png) · [SVG 矢量图](../diagrams/kritt-cairn-audit-workflow.svg) · [draw.io 可编辑文件](../diagrams/kritt-cairn-audit-workflow.drawio)。Kritt 仅展示数据库，Cairn 展开威胁模型、研究循环、旁路监督和独立结案；图示为 v0.5 目标流程。
+
 ```mermaid
 flowchart TB
     U[用户需求与答复] --> C[Controller：固定 scan、准备目录和材料入口]

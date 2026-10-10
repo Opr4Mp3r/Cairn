@@ -43,12 +43,14 @@ def research_payload(project: ProjectDetail, text: str) -> dict:
     raise ValueError("audit output requires a complete top-level accepted wrapper")
 
 
-def research_receipt(backend, workspace: str, project: ProjectDetail, worker, *, phase: str, session, prompt: str, process) -> None:
+def research_receipt(backend, workspace: str, project: ProjectDetail, worker, *, phase: str, session, prompt: str, process,
+                     intent_id: str | None = None) -> None:
     if project.project.mode != "audit":
         return
     path = str(Path(workspace) / "research" / f"{phase}-{uuid.uuid4().hex}.json")
     backend.write_text_file(workspace, path, json.dumps({
-        "project_id": project.project.id, "worker": worker.name, "phase": phase,
+        "project_id": project.project.id, "worker": worker.name, "harness": worker.type, "phase": phase,
+        "role": phase.split("_", 1)[0], "intent_id": intent_id,
         "session": session, "prompt": prompt, "process": asdict(process),
         "note": "Raw execution receipt; exit code alone does not validate an audit claim.",
     }, ensure_ascii=False, indent=2))

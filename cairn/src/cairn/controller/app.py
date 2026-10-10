@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 from importlib import resources
@@ -10,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from cairn.controller.models import AgentCallResult, FileReadResult
+from cairn.dispatcher.config import WorkerConfig
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.output_parser import extract_json_object
 from cairn.dispatcher.runtime import execution
@@ -17,6 +19,8 @@ from cairn.dispatcher.runtime.backend import ExecutionBackend
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.runtime.process import ProcessResult
 from cairn.dispatcher.workers.registry import get_driver
+
+LOG = logging.getLogger(__name__)
 
 
 def call_agent(
@@ -31,13 +35,33 @@ def call_agent(
     phase: str,
     cancellation: TaskCancellation | None = None,
     session: str | None = None,
+    worker: WorkerConfig | None = None,
 ) -> AgentCallResult:
     if config.controller is None:
         raise ValueError("controller configuration is required")
-    name = config.controller.roles.model_dump().get(role)
-    if name is None:
-        raise ValueError(f"unknown controller role: {role}")
-    worker = next(worker for worker in config.workers if worker.name == name)
+    if worker is None:
+        selected_phase = phase.removesuffix("_format_repair")
+        if selected_phase == "builder":
+            selected_phase = "build"
+        if config.role_pools:
+            if selected_phase not in config.role_pools:
+                selected_phase = "closing" if role == "builder" else "preflight"
+            candidates = config.pool_workers(selected_phase)
+            sessions = getattr(backend, "_controller_sessions", {})
+            cursors = getattr(backend, "_controller_cursors", {})
+            if session is not None and session in sessions:
+                worker = sessions[session]
+            else:
+                index = cursors.get(selected_phase, 0) % len(candidates)
+                worker = candidates[index]
+                cursors[selected_phase] = index + 1
+            backend._controller_cursors = cursors
+            backend._controller_sessions = sessions
+        else:
+            name = config.controller.roles.model_dump().get(role)
+            if name is None:
+                raise ValueError(f"unknown controller role: {role}")
+            worker = next(worker for worker in config.workers if worker.name == name)
     driver = get_driver(worker.type, config.runtime.execution)
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
@@ -57,6 +81,8 @@ def call_agent(
         argv = driver.build_conclude(worker, prompt, session)
     started = time.monotonic()
     cancellation = cancellation or TaskCancellation()
+    LOG.info("Agent 调用开始 worker=%s phase=%s session=%s timeout=%ss",
+             worker.name, phase, session, timeout_seconds)
     try:
         process = execution.run_worker_process(
             backend, str(workspace.resolve()), worker, argv,
@@ -66,8 +92,12 @@ def call_agent(
         process = ProcessResult(1, "", str(exc))
 
     session = driver.extract_session(session, process.stdout, process.stderr)
+    if config.role_pools and session is not None:
+        sessions = getattr(backend, "_controller_sessions", {})
+        sessions[session] = worker
+        backend._controller_sessions = sessions
     result = AgentCallResult(
-        role=role, worker=worker.name, phase=phase, workspace=str(workspace.resolve()),
+        role=role, worker=worker.name, harness=worker.type, phase=phase, workspace=str(workspace.resolve()),
         session=session, prompt=prompt, status="failed", process=process,
         elapsed_seconds=time.monotonic() - started,
     )
@@ -89,6 +119,8 @@ def call_agent(
             result.error = str(exc)
         else:
             result.status = "success"
+    LOG.info("Agent 调用结束 worker=%s phase=%s session=%s status=%s elapsed=%.1fs",
+             worker.name, phase, session, result.status, result.elapsed_seconds)
     return result
 
 

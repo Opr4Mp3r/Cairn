@@ -8,11 +8,12 @@ import shutil
 import signal
 import subprocess
 import time
+import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cairn.controller.kritt_query import write_json as _write
-from cairn.controller.audit import AuditPlan, prepare_audit
+from cairn.controller.audit import AuditPlan, PreflightNeedsRevision, prepare_audit
 from cairn.controller.builder import continue_builder
 from cairn.controller.models import AgentCallResult
 from cairn.controller.local import CLI, start_server, stop_processes
@@ -87,12 +88,13 @@ def import_plan(client: CairnClient, backend: LocalBackend, prepared: dict) -> d
     return result
 
 
-def import_audit_plan(config, client, backend, prepared, *, ask=None, cancellation=None) -> dict:
+def import_audit_plan(config, client, backend, prepared, *, ask=None, cancellation=None,
+                      external_builder=False) -> dict:
     folder = Path(prepared["run_dir"])
     repo = Path(prepared["source_root"]).resolve(strict=True)
     plan = AuditPlan.model_validate(json.loads(Path(prepared["plan"]).read_text()))
     baseline = json.loads(Path(prepared["source_baseline"]).read_text())
-    controller_run = folder / "controller" / "prepare"
+    controller_run = folder / "controller" / (f"prepare-{uuid.uuid4().hex}" if external_builder else "prepare")
     receipts, known_calls = [], set()
 
     def add_builder_receipts():
@@ -129,7 +131,7 @@ def import_audit_plan(config, client, backend, prepared, *, ask=None, cancellati
         return revised
 
     result = prepare_audit(config, client, backend, plan=plan, context=context, run_dir=controller_run,
-                           revise=revise, receipts=receipts, cancellation=cancellation)
+                           revise=None if external_builder else revise, receipts=receipts, cancellation=cancellation)
     result["source_root"] = str(repo)
     _write(folder / "project.json", result)
     return result
@@ -151,7 +153,7 @@ def save_results(client: CairnClient, project_id: str, folder: Path) -> dict[str
 
 
 def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCancellation | None = None,
-                 report=lambda event: None, ask=None) -> dict:
+                 report=lambda event: None, ask=None, external_builder=False) -> dict:
     """Own a local Server, import the graph, then start the existing Dispatcher."""
     if config.runtime.execution != "local":
         raise ValueError("Builder research requires local execution")
@@ -194,7 +196,8 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
         client = CairnClient(config.server, trust_env=False)
         backend = LocalBackend(config.local)
         if audit_run:
-            state.update(import_audit_plan(config, client, backend, prepared, ask=ask, cancellation=token))
+            state.update(import_audit_plan(config, client, backend, prepared, ask=ask, cancellation=token,
+                                          external_builder=external_builder))
         else:
             state.update(import_plan(client, backend, prepared))
         state["project_url"] = f"{config.server}/#/projects/{state['project_id']}"
@@ -236,6 +239,11 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
                     raise RuntimeError("Audit monitor exited before project termination; see controller.log")
                 raise RuntimeError("Dispatcher exited; see dispatcher.log")
             time.sleep(.2)
+    except PreflightNeedsRevision as exc:
+        if not external_builder:
+            raise
+        state.update(status="needs_revision", issues=exc.issues, receipts=exc.receipts)
+        return state
     except BaseException as exc:
         state.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
                      error=f"{type(exc).__name__}: {exc}")

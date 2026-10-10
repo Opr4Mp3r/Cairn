@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import shutil
 from pathlib import Path
 import time
@@ -10,6 +11,7 @@ from importlib import resources
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from cairn.controller.app import call_agent
+from cairn.controller.pool import run_pooled
 from cairn.audit_evidence import json_digest, repository_baseline, source_evidence, assert_repository_unchanged
 from cairn.audit_inputs import agent_view, READING_GUIDANCE
 from cairn.controller.kritt_query import write_json
@@ -45,6 +47,14 @@ class AuditPlan(BaseModel):
     seeds: list[AuditSeed] = Field(default_factory=list)
     intents: list[AuditInitialIntent] = Field(min_length=1)
     hints: list[CreateHintInline] = Field(default_factory=list)
+
+
+class PreflightNeedsRevision(ValueError):
+    def __init__(self, issues: list[str], run_dir: Path):
+        self.issues = issues
+        self.receipts = str(run_dir)
+        super().__init__(f"goal preflight requires revision: {issues}; receipts: {run_dir}")
+
 
 class PreflightResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -112,13 +122,14 @@ def _require_ok(response: ApiResult, action: str):
 
 
 def _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts, cancellation,
-           phase: str, role: str, model: type[BaseModel], context: dict, *, session=None):
+           phase: str, role: str, model: type[BaseModel], context: dict, *, session=None, worker=None):
     instruction = resources.files("cairn.controller").joinpath(f"prompts/{phase}.md").read_text(encoding="utf-8")
     instruction += "\n" + READING_GUIDANCE
     payload = {**agent_view(context), "output_schema": model.model_json_schema(by_alias=True)}
     if phase == "seed_review":
-        keys = [seed["key"] for seed in context["plan"]["seeds"]]
-        allowed = ["origin", *keys]
+        all_keys = [seed["key"] for seed in context["plan"]["seeds"]]
+        keys = context.get("review_keys", all_keys)
+        allowed = ["origin", *all_keys]
         payload["valid_fact_references"] = allowed
         payload["origin_fact_id"] = "origin"
         definitions = payload["output_schema"]["$defs"]
@@ -137,7 +148,8 @@ def _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts, c
         (folder / "input.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             result = call_agent(config, backend, role=role, prompt=prompt, result_model=model,
-                                workspace=run_dir, timeout_seconds=remaining, phase=name, cancellation=cancellation, session=session)
+                                workspace=run_dir, timeout_seconds=remaining, phase=name, cancellation=cancellation, session=session,
+                                **({"worker": worker} if worker is not None else {}))
         except (OSError, ValueError) as exc:
             (folder / "result.json").write_text(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False), encoding="utf-8")
             raise
@@ -161,6 +173,35 @@ def _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts, c
         instruction = "只修复以下已有输出以符合 schema，不调用工具、不重新研究、不添加证据或改变原语义。仅返回一个原始 JSON 对象。"
         payload = {"previous_response": result.response, "validation_error": result.error,
                    "output_schema": payload["output_schema"]}
+
+
+def _review_seeds(config, backend, repo, workspace_root, baseline, run_dir, receipts, cancellation, plan, context):
+    payload = {**context, "plan": plan.model_dump(mode="json", by_alias=True)}
+    count = min(len(plan.seeds), config.pool_capacity("seed_review")) if config.role_pools else 1
+    if count <= 1:
+        return _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts,
+                      cancellation, "seed_review", "reviewer", SeedReviewResult, payload)
+    keys = [seed.key for seed in plan.seeds]
+    batches = [(index, keys[index::count]) for index in range(count)]
+    batch_receipts = [[] for _ in batches]
+
+    def invoke(batch, worker, child):
+        index, review_keys = batch
+        folder = run_dir / f"seed-batch-{index + 1:03d}"
+        folder.mkdir()
+        return _stage(config, backend, repo, workspace_root, baseline, folder, batch_receipts[index],
+                      child, "seed_review", "reviewer", SeedReviewResult,
+                      {**payload, "review_keys": review_keys}, worker=worker)
+
+    reviews = []
+    try:
+        with closing(run_pooled(config, "seed_review", batches, invoke, cancellation)) as results:
+            for _, reviewed in results:
+                reviews.extend(reviewed.reviews)
+    finally:
+        for batch in batch_receipts:
+            receipts.extend(batch)
+    return SeedReviewResult(reviews=reviews)
 
 
 def prepare_audit(config: DispatchConfig, client: CairnClient, backend: LocalBackend, *,
@@ -189,12 +230,14 @@ def prepare_audit(config: DispatchConfig, client: CairnClient, backend: LocalBac
                         {**context, "plan": plan.model_dump(mode="json", by_alias=True)})
         if verdict.approved:
             break
-        if revision == config.controller.max_goal_revisions or revise is None:
+        if revise is None:
+            raise PreflightNeedsRevision(verdict.issues, run_dir)
+        if revision == config.controller.max_goal_revisions:
             raise ValueError(f"goal preflight failed after {revision + 1} attempts: {verdict.issues}; receipts: {run_dir}")
         plan = revise(plan, verdict.issues)
     if plan.seeds:
-        reviewed = stage("seed_review", "reviewer", SeedReviewResult,
-                         {**context, "plan": plan.model_dump(mode="json", by_alias=True)})
+        reviewed = _review_seeds(config, backend, repo, workspace_root, baseline, run_dir, receipts,
+                                 cancellation, plan, context)
         apply_seed_reviews(plan, reviewed, repo, baseline)
     existing_sources = {"origin", *(seed.key for seed in plan.seeds)}
     for seed in plan.seeds:

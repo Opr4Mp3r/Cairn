@@ -196,25 +196,26 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 
 ### Kritt 与本地审计入口
 
-Kritt 的已交付 generic 流程记录于[正向 MVP 开发约定](docs/specs/kritt-builder-mvp.md)。当前按 [v0.5 接回方案](docs/specs/kritt-audit-reconnect-mvp.md)开发：R-CP1、R-CP2 已验收通过，Builder 同会话自主取材并形成 AuditPlan，接入 audit 研究与旁路监督；R-CP3 已验收通过，包含独立结案、预算收尾与五份结果归档。
+以项目内的 [cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) 作为 Claude Code 的主交互入口。在本仓库打开 Claude Code，调用 `/cairn-builder` 并说明目标：当前会话补充需求、只读查询 Kritt、阅读源码并保存 AuditPlan，独立 Controller 预审通过后启动后台研究。
+
+```text
+/cairn-builder 使用 zentao 目标，静态梳理 module/install/control.php 构造函数的进入和终止条件，列出表达式与行号；部署和匿名可达性未知。
+```
+
+先按 [Builder 使用指南](docs/builder-prepare.md) 配置源码、manifest 和只读连接。Skill 调用 `cairn prepare` 固定输入，再调用 `cairn start` 提交方案；预审要求修订时返回同一会话处理。启动成功后返回项目网页及进度、日志路径，Skill 结束开题，后台监督进程继续管理研究、独立结案和归档。
+
+后台角色使用 [角色资源池](docs/builder-prepare.md#角色资源池)：例如 `explore: {claudecode: 3, grok: 2}` 允许同一项目最多五个 Explore 并行。各角色容量直接由 harness 数量相加，模型与 provider 沿用本机 CLI 配置；原生 Builder 留在当前会话。
 
 | 入口或文档 | 当前用途 |
 |---|---|
-| [Kritt 取材探针](docs/kritt-probe.md) | B-CP1 已完成，只读查询与源码观察，不创建研究项目 |
-| [Builder 审计入口](docs/builder-prepare.md) | 同会话取材、预审/种子复核、研究/监督、独立结案及结果归档；R-CP3 已验收通过 |
-| [本地 audit 模式](docs/audit-local.md) | 已完成的独立审计路径，包含复核、终审及预算；Kritt 接回方案将复用这些能力 |
+| [原生 cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) | 交互开题主入口；问答与方案修订留在当前 Claude Code 会话 |
+| [Builder 使用指南](docs/builder-prepare.md) | 准备配置、prepare/start 接口、后台研究、预算和结果复盘 |
+| [Kritt 取材探针](docs/kritt-probe.md) | 只读查询与源码观察，不创建研究项目 |
+| [本地 audit 模式](docs/audit-local.md) | 已有独立审计路径，包含复核、终审及预算 |
 
-Kritt使用[专用配置示例](dispatch.builder.example.yaml)。复制后填好目标源码、manifest及只读连接；当前命令生成方案后启动本次 Server、Dispatcher 和 Controller monitor：
+原 `uv run --project cairn cairn builder ...` 保留为已有自动化的批处理兼容入口。其内部 Builder 会话及前台研究生命周期与原生 Skill 入口不同；新交互任务使用 Skill。
 
-```sh
-uv run --project cairn cairn builder --config dispatch.builder.yaml --target zentao --scan-id 19 \
-  --goal "读取module/install/control.php中构造函数的进入和终止条件，列出表达式与行号，仅做静态源码阅读" \
-  --run-dir /absolute/path/to/new-run
-```
-
-准备条件、时间预算、结果复盘及 Grok 切换见[Builder使用指南](docs/builder-prepare.md)。
-
-2026-10-10：R-CP2 已验收并提交 `17b6d72`；R-CP3 已验收通过，接回 MVP 完整交付。
+Kritt 接回实现背景见 [v0.5 接回方案](docs/specs/kritt-audit-reconnect-mvp.md)，历史 generic 流程见 [正向 MVP 开发约定](docs/specs/kritt-builder-mvp.md)。
 
 ### Local code audit MVP（已完成的 audit 路径）
 

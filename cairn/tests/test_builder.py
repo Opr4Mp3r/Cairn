@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 
 from click.testing import CliRunner
@@ -7,7 +9,9 @@ import pytest
 
 from cairn.cli import main
 from cairn.controller.audit import AuditPlan
-from cairn.controller.builder import run_builder
+from cairn.controller.builder import prepare_builder, run_builder
+from cairn.controller.models import AgentCallResult
+from cairn.dispatcher.runtime.process import ProcessResult
 from test_kritt_probe import probe
 
 
@@ -81,7 +85,42 @@ def build(prepared, **kwargs):
                        run_dir=folder, view_path=view, **kwargs)
 
 
-def test_plan_uses_native_queries_and_is_an_unverified_audit_plan(prepared, monkeypatch):
+def test_prepare_saves_verified_inputs_and_a_working_query_command_without_agent(probe, monkeypatch):
+    config, _, view, folder = probe
+    reference = folder.parent / "scope.txt"
+    reference.write_text("仅阅读安装入口源码", encoding="utf-8")
+    config.controller.kritt.targets["test"].references = [str(reference)]
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("offline preparation must not call an Agent, backend, or database")
+
+    for name in ("call_agent", "LocalBackend", "read_kritt_view"):
+        monkeypatch.setattr(f"cairn.controller.builder.{name}", forbidden)
+    result = prepare_builder(config, target_name="test", user_goal="  读取已安装状态下的入口源码  ",
+                             run_dir=folder, view_path=view)
+    assert result == json.loads((folder / "run.json").read_text())
+    assert result["status"] == "prepared" and result["calls"] == 0 and result["builder_session"] is None
+    assert result["queries"] == result["query_pages"] == 0
+    assert json.loads(Path(result["requirements"]).read_text()) == {
+        "user_goal": result["user_goal"], "messages": [{"role": "user", "content": result["user_goal"]}],
+    }
+    baseline = json.loads(Path(result["source_baseline"]).read_text())
+    assert baseline["files"] and baseline["source_manifest"]["commit_sha"] == result["commit_sha"]
+    assert Path(result["view"]).read_bytes() == view.read_bytes()
+    references = json.loads(Path(result["references"]).read_text())
+    assert Path(references[0]["path"]).read_text() == reference.read_text()
+    assert json.loads(Path(result["plan_schema"]).read_text()) == AuditPlan.model_json_schema()
+    assert json.loads(Path(result["materials"]).read_text()) == []
+    assert json.loads((folder / "query-receipts.json").read_text())["queries"] == []
+    assert not Path(result["plan"]).exists() and not list(folder.glob("call-*"))
+    assert not (folder / "cairn.db").exists() and not (folder / "project.json").exists()
+    query = subprocess.run(shlex.split(result["kritt_query_command"]), input='{"action":"describe"}',
+                           capture_output=True, text=True, check=True)
+    assert json.loads(query.stdout)["status"] == "success"
+
+
+def test_plan_uses_native_queries_and_is_an_unverified_audit_plan(prepared, monkeypatch, caplog):
+    caplog.set_level("INFO")
     monkeypatch.setattr("cairn.dispatcher.protocol.client.CairnClient.create_audit",
                         lambda *args, **kwargs: pytest.fail("R-CP1 must not create a project"))
     result = build(prepared)
@@ -93,17 +132,49 @@ def test_plan_uses_native_queries_and_is_an_unverified_audit_plan(prepared, monk
     assert json.loads((folder / "selected-materials.json").read_text())
     assert (folder / "source-baseline.json").exists() and (folder / "kritt-view.json").exists()
     assert not (folder / "error.json").exists() and not list(folder.glob("**/project.json"))
+    assert "Builder：读取 Kritt 视图" in caplog.text
+    assert "Builder：核验源码" in caplog.text
+    assert "Builder：保存参考资料与需求" in caplog.text
+    assert f"phase=builder session={result['builder_session']} timeout=" in caplog.text
+    assert "status=success elapsed=" in caplog.text
+    assert "Builder：方案已就绪" in caplog.text
+    assert "已返回 ask" not in caplog.text
 
 
-def test_answer_resumes_same_session_and_saves_requirements(prepared, monkeypatch):
+def test_answer_resumes_same_session_and_saves_requirements(prepared, monkeypatch, caplog):
     monkeypatch.setenv("BUILDER_TEST_MODE", "ask")
+    caplog.set_level("INFO")
     seen = []
-    result = build(prepared, ask=lambda questions: seen.append(questions) or "已安装，攻击者未登录")
+
+    def reply(questions):
+        assert "Builder 已返回 ask：需要补充 1 个问题" in caplog.text
+        assert "Builder：等待用户答复" in caplog.text
+        seen.append(questions)
+        return "已安装，攻击者未登录"
+
+    result = build(prepared, ask=reply)
     calls = [json.loads(line) for line in (prepared[-1] / "fake-harness-calls.jsonl").read_text().splitlines()]
     assert seen == [["部署状态是什么？"]] and result["calls"] == 2
     assert calls[0]["session"] == calls[1]["session"] == result["builder_session"]
     assert not calls[0]["resumed"] and calls[1]["resumed"]
     assert json.loads((prepared[-1] / "requirements.json").read_text())["messages"][-1]["content"] == "已安装，攻击者未登录"
+    assert f"Builder：已收到答复，继续 session={result['builder_session']}" in caplog.text
+
+
+def test_timeout_preserves_session_in_error_receipt(prepared, monkeypatch):
+    def timed_out(config, backend, **kwargs):
+        return AgentCallResult(role="builder", worker="test-worker", phase=kwargs["phase"],
+                               workspace=str(kwargs["workspace"]), session="timed-out-session",
+                               prompt=kwargs["prompt"], status="timed_out", error="Agent 调用超时",
+                               process=ProcessResult(-15, "", "", timed_out=True), elapsed_seconds=18)
+
+    monkeypatch.setattr("cairn.controller.builder.call_agent", timed_out)
+    with pytest.raises(RuntimeError, match="timed_out"):
+        build(prepared)
+    error = json.loads((prepared[-1] / "error.json").read_text())
+    call = json.loads((prepared[-1] / "call-001" / "result.json").read_text())
+    assert error["builder_session"] == call["session"] == "timed-out-session"
+    assert error["calls"] == 1 and not (prepared[-1] / "call-001-format-repair").exists()
 
 
 def test_paginated_get_is_delivered_inside_one_harness_call(prepared):
@@ -175,7 +246,31 @@ def test_cli_hands_audit_plan_to_research_without_new_product_flags(prepared, mo
     result = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
                                      "--goal", "读取源码", "--run-dir", str(folder), "--view", str(view)])
     assert result.exit_code == 0 and len(received) == 1
+    assert json.loads(result.stdout)["status"] == "stopped"
+    assert "Builder：读取 Kritt 视图" in result.stderr
+    assert "Agent 调用开始" in result.stderr and "Agent 调用结束" in result.stderr
     assert (folder / "plan.json").exists() and not (folder / "cairn.db").exists()
     rejected = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
                                        "--goal", "读取源码", "--run-dir", str(folder) + "-2", "--prepare-only"])
     assert rejected.exit_code != 0
+
+
+def test_cli_questions_and_prompt_use_stderr(prepared, monkeypatch):
+    config, config_path, view, folder = prepared
+    config.controller.research_prompt_group = "audit"
+    config_path.write_text(config.model_dump_json())
+    monkeypatch.setenv("BUILDER_TEST_MODE", "ask")
+
+    def interactive_builder(*args, **kwargs):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        return run_builder(*args, **kwargs)
+
+    monkeypatch.setattr("cairn.controller.builder.run_builder", interactive_builder)
+    monkeypatch.setattr("cairn.controller.research.run_research", lambda *args, **kwargs: {"status": "stopped"})
+    result = CliRunner().invoke(main, ["builder", "--config", str(config_path), "--target", "test",
+                                     "--goal", "读取源码", "--run-dir", str(folder), "--view", str(view)],
+                                input="已安装，攻击者未登录\n")
+    assert result.exit_code == 0
+    assert "部署状态是什么？" in result.stderr and "请补充:" in result.stderr
+    assert "部署状态是什么？" not in result.stdout and "请补充:" not in result.stdout
+    assert json.loads(result.stdout.splitlines()[-1]) == {"status": "stopped"}

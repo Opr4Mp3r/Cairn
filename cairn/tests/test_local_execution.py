@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from cairn.dispatcher.config import DispatchConfig, LocalConfig, WorkerConfig
 from cairn.dispatcher.runtime.local_backend import LocalBackend
+from cairn.dispatcher.runtime import local_process
 from cairn.dispatcher.runtime.local_process import LocalProcess
 from cairn.dispatcher.scheduler import loop as loop_module
 from cairn.dispatcher.tasks import common, explore
@@ -70,6 +71,53 @@ def test_local_process_times_out_and_kills_within_grace() -> None:
 
     assert result.timed_out
     assert elapsed < 10  # killed on its own timeout, not the 30s outer backstop
+
+
+@pytest.mark.parametrize("configured_timeout,outer_timeout,finish_at,expected_elapsed,timed_out", [
+    (31, 99, 50, 31, True),
+    (None, 31, 50, 31, True),
+    (31, 99, 20, 20, False),
+    (None, None, 31, 31, False),
+])
+def test_local_process_progress_preserves_deadline_and_unbounded_wait(
+    monkeypatch, caplog, configured_timeout, outer_timeout, finish_at, expected_elapsed, timed_out,
+):
+    clock = [0.0]
+    terminated = []
+
+    class SilentProcess:
+        pid = 12345
+        returncode = None
+
+        def wait(self, timeout):
+            if self.returncode is not None:
+                return self.returncode
+            if clock[0] + timeout >= finish_at:
+                clock[0] = finish_at
+                self.returncode = 0
+                return 0
+            clock[0] += timeout
+            raise local_process.subprocess.TimeoutExpired("silent-worker", timeout)
+
+    process = LocalProcess(["silent-worker"], cwd=os.getcwd(), env={}, timeout_seconds=configured_timeout)
+    process._process = SilentProcess()
+
+    def terminate():
+        terminated.append(clock[0])
+        process._process.returncode = -15
+
+    monkeypatch.setattr(local_process.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(process, "_terminate", terminate)
+    caplog.set_level("INFO", logger=local_process.__name__)
+    result = process.communicate(timeout=outer_timeout)
+
+    assert clock[0] == expected_elapsed
+    assert result.timed_out is timed_out
+    assert terminated == ([expected_elapsed] if timed_out else [])
+    assert result.stdout == result.stderr == ""
+    assert "进程仍在运行 pid=12345 elapsed=15.0s" in caplog.text
+    if timed_out:
+        assert "进程达到时限 pid=12345 elapsed=31.0s" in caplog.text
 
 
 def test_local_process_kill_terminates_child_process_group(tmp_path: Path) -> None:

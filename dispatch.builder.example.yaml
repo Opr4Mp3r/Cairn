@@ -1,11 +1,9 @@
-# Builder取材与AuditPlan → audit研究、旁路监督和独立结案。
+# 原生 Skill 开题 → 角色资源池研究、旁路监督和独立结案。
 server: "http://127.0.0.1:0"
 runtime:
   execution: local
   worker_healthcheck: disabled
-  max_workers: 1
   max_running_projects: 1
-  max_project_workers: 1
   interval: 3
   healthcheck_timeout: 15
   prompt_group: default
@@ -19,18 +17,17 @@ tasks:
   explore:
     timeout: 300
     conclude_timeout: 60
-workers:
-  - name: claude-main
-    type: claudecode
-    task_types: [reason, explore]
-    max_running: 1
-    priority: 0
+# 各角色容量等于其 harness 数量之和；模型沿用本机 CLI 配置。
+role_pools:
+  explore: {claudecode: 1}
+  reason: {claudecode: 1}
+  preflight: {claudecode: 1}
+  seed_review: {claudecode: 1}
+  overseer: {claudecode: 1}
+  closing: {claudecode: 1}
+  final_review: {claudecode: 1}
 controller:
   research_prompt_group: audit
-  roles:
-    builder: claude-main
-    # 预审、种子复核和Overseer使用独立session。
-    reviewer: claude-main
   timeouts:
     build: 300
     preflight: 240

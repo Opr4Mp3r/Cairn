@@ -1,10 +1,11 @@
-"""Prepare an AuditPlan using one harness session and read-only Kritt commands."""
+"""Prepare audit inputs, optionally building a plan in one harness session."""
 from __future__ import annotations
 
 from collections.abc import Callable
 from graphlib import TopologicalSorter
 from importlib import resources
 import json
+import logging
 import os
 from pathlib import Path
 import shlex
@@ -22,6 +23,8 @@ from cairn.controller.kritt_source import verify_source
 from cairn.dispatcher.config import DispatchConfig, LocalConfig
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.runtime.local_backend import LocalBackend
+
+LOG = logging.getLogger(__name__)
 
 
 class Ask(BaseModel):
@@ -73,8 +76,9 @@ def _references(target, folder: Path) -> Path:
     return output
 
 
-def _turn(config, backend, folder: Path, call: int, instruction: str, context: dict, cancellation, session):
+def _turn(config, backend, folder: Path, call: int, instruction: str, context: dict, cancellation, prepared):
     deadline = time.monotonic() + config.controller.timeouts.build
+    session = prepared.get("builder_session")
     payload, prompt_text = context, instruction
     for attempt in range(2):
         if cancellation.is_cancelled:
@@ -85,12 +89,15 @@ def _turn(config, backend, folder: Path, call: int, instruction: str, context: d
         directory = folder / (f"call-{call:03d}" if not attempt else f"call-{call:03d}-format-repair")
         directory.mkdir()
         _write(directory / "input.json", payload)
+        LOG.info("Builder 第 %s 轮：%s，调用记录=%s", call,
+                 "修复输出格式" if attempt else "等待 Agent 返回 ask 或 finish", directory)
         called = call_agent(config, backend, role="builder", session=session,
                             prompt=prompt_text + "\n\n" + json.dumps(payload, ensure_ascii=False),
                             result_model=BuilderAction, workspace=folder, timeout_seconds=remaining,
                             phase="builder" if not attempt else "builder_format_repair", cancellation=cancellation)
         _write(directory / "result.json", json.loads(called.model_dump_json()))
         session = called.session
+        prepared["builder_session"] = session
         if called.status == "success":
             return BuilderAction.model_validate(called.data).root, session
         if called.status != "invalid_output" or attempt:
@@ -103,11 +110,24 @@ def _turn(config, backend, folder: Path, call: int, instruction: str, context: d
     raise AssertionError("unreachable")
 
 
-def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run_dir: Path,
-                scan_id: int | None = None, view_path: Path | None = None,
-                ask: Callable[[list[str]], str] | None = None,
-                cancellation: TaskCancellation | None = None) -> dict:
-    """Prepare an audit plan. R-CP1 does not create or activate a Cairn project."""
+def _save_error(folder: Path, prepared: dict, exc: BaseException) -> None:
+    error = {"status": "error", "type": type(exc).__name__, "error": str(exc),
+             "calls": prepared.get("calls", 0), "builder_session": prepared.get("builder_session")}
+    query_context = folder / "kritt-context.json"
+    if query_context.exists():
+        try:
+            collect_queries(query_context)
+        except (OSError, ValueError, KeyError) as collection_error:
+            error["collection_error"] = str(collection_error)
+    _write(folder / "error.json", error)
+    LOG.error("Builder 准备失败 type=%s session=%s error_file=%s",
+              error["type"], error["builder_session"], folder / "error.json")
+
+
+def prepare_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run_dir: Path,
+                    scan_id: int | None = None, view_path: Path | None = None,
+                    cancellation: TaskCancellation | None = None) -> dict:
+    """Save fixed audit inputs and the plan schema without calling an Agent."""
     if config.controller is None or config.controller.kritt is None or config.runtime.execution != "local":
         raise ValueError("builder requires controller.kritt and local execution")
     if not user_goal.strip():
@@ -126,6 +146,8 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
     prepared = {}
     query_context = folder / "kritt-context.json"
     try:
+        LOG.info("Builder：读取 Kritt 视图 target=%s source=%s run_dir=%s",
+                 target_name, "PostgreSQL" if view_path is None else "离线文件", folder)
         if view_path is None:
             dsn = os.environ.get(settings.dsn_env)
             if not dsn:
@@ -141,6 +163,7 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
                 selected is not None and view.scan["id"] != selected
             ) or (target.commit is not None and view.scan["commit_sha"] != target.commit):
                 raise ValueError("offline view does not match the configured target selection")
+        LOG.info("Builder：核验源码 scan_id=%s commit=%s", view.scan["id"], view.scan["commit_sha"])
         baseline = verify_source(repo, view, manifest, cancellation=cancellation)
         _write(folder / "source-baseline.json", baseline)
         view.save(folder / "kritt-view.json")
@@ -149,27 +172,43 @@ def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run
             "queries_dir": str(folder / "queries"), "max_rows": settings.max_rows, "max_bytes": settings.max_bytes,
             "response_rows": settings.response_rows, "response_bytes": settings.response_bytes,
         })
+        LOG.info("Builder：保存参考资料与需求")
         references = _references(target, folder)
         messages = [{"role": "user", "content": user_goal.strip()}]
         _write(folder / "requirements.json", {"user_goal": user_goal.strip(), "messages": messages})
+        _write(folder / "audit-plan.schema.json", AuditPlan.model_json_schema())
         prepared = {
-            "status": "preparing", "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
+            "status": "prepared", "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
             "repo_full": target.repo_full, "source_root": str(repo), "run_dir": str(folder),
             "target": target_name, "user_goal": user_goal.strip(), "builder_session": None, "calls": 0,
             "plan": str(folder / "plan.json"), "materials": str(folder / "selected-materials.json"),
             "requirements": str(folder / "requirements.json"), "references": str(references),
             "source_baseline": str(folder / "source-baseline.json"), "query_context": str(query_context),
+            "view": str(folder / "kritt-view.json"), "plan_schema": str(folder / "audit-plan.schema.json"),
+            "kritt_query_command": shlex.join([sys.executable, "-m", "cairn.controller.kritt_query",
+                                                "--context", str(query_context)]),
         }
+        prepared.update(collect_queries(query_context))
+        _write(folder / "run.json", prepared)
+        LOG.info("Builder：材料已就绪 run=%s plan_schema=%s", folder / "run.json", prepared["plan_schema"])
+        return prepared
+    except BaseException as exc:
+        _save_error(folder, prepared, exc)
+        raise
+
+
+def run_builder(config: DispatchConfig, *, target_name: str, user_goal: str, run_dir: Path,
+                scan_id: int | None = None, view_path: Path | None = None,
+                ask: Callable[[list[str]], str] | None = None,
+                cancellation: TaskCancellation | None = None) -> dict:
+    """Prepare audit inputs and build a plan through the headless harness."""
+    cancellation = cancellation or TaskCancellation()
+    prepared = prepare_builder(config, target_name=target_name, user_goal=user_goal, run_dir=run_dir,
+                               scan_id=scan_id, view_path=view_path, cancellation=cancellation)
+    try:
         return continue_builder(config, prepared, ask=ask, cancellation=cancellation)
     except BaseException as exc:
-        error = {"status": "error", "type": type(exc).__name__, "error": str(exc),
-                 "calls": prepared.get("calls", 0), "builder_session": prepared.get("builder_session")}
-        if query_context.exists():
-            try:
-                collect_queries(query_context)
-            except (OSError, ValueError, KeyError) as collection_error:
-                error["collection_error"] = str(collection_error)
-        _write(folder / "error.json", error)
+        _save_error(Path(prepared["run_dir"]), prepared, exc)
         raise
 
 
@@ -205,14 +244,15 @@ def continue_builder(config: DispatchConfig, prepared: dict, *, current_plan: Au
     while True:
         calls += 1
         prepared["calls"] = calls
-        action, session = _turn(config, backend, folder, calls, instruction, context, cancellation, session)
-        prepared["builder_session"] = session
+        action, session = _turn(config, backend, folder, calls, instruction, context, cancellation, prepared)
         counts = collect_queries(Path(prepared["query_context"]))
         if isinstance(action, Ask):
+            LOG.info("Builder 已返回 ask：需要补充 %s 个问题", len(action.questions))
             if ask is None:
                 raise ValueError("需要补充信息后重新运行：" + "；".join(action.questions))
             if not session:
                 raise RuntimeError("builder harness returned no session for the answer")
+            LOG.info("Builder：等待用户答复")
             reply = ask(action.questions)
             if not isinstance(reply, str) or not reply.strip():
                 raise ValueError("补充内容为空")
@@ -222,6 +262,7 @@ def continue_builder(config: DispatchConfig, prepared: dict, *, current_plan: Au
             context = {"reply": reply.strip(), "requirements_path": str(folder / "requirements.json"),
                        "output_schema": BuilderAction.model_json_schema()}
             instruction = "结合用户答复继续当前开题，必要时使用已有工具；最终只返回 ask 或 finish JSON。"
+            LOG.info("Builder：已收到答复，继续 session=%s", session)
             continue
         for seed in action.seeds:
             seed.audit.review_status = "unverified"
@@ -230,4 +271,6 @@ def continue_builder(config: DispatchConfig, prepared: dict, *, current_plan: Au
         prepared.update(status="plan_ready", builder_session=session, calls=calls,
                         **counts, seeds=len(action.seeds), intents=len(action.intents))
         _write(folder / "run.json", prepared)
+        LOG.info("Builder：方案已就绪 calls=%s seeds=%s intents=%s plan=%s",
+                 calls, len(action.seeds), len(action.intents), folder / "plan.json")
         return prepared

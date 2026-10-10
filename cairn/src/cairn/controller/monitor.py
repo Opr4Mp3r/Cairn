@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import closing
 from importlib import resources
 import json
 from pathlib import Path
@@ -13,6 +14,7 @@ from cairn.audit_evidence import source_evidence
 from cairn.audit_inputs import agent_view, material_paths, READING_GUIDANCE
 from cairn.controller.app import call_agent
 from cairn.controller.audit import _require_ok
+from cairn.controller.pool import run_pooled
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.output_parser import FENCED_BLOCK_RE
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -62,7 +64,7 @@ def _remaining(deadline: str) -> int:
     return int((end - datetime.now(timezone.utc)).total_seconds()) - 5
 
 
-def _invoke(config, client, backend, project, *, phase, context, model, timeout, cancellation):
+def _invoke(config, client, backend, project, *, phase, context, model, timeout, cancellation, worker=None):
     if cancellation.is_cancelled:
         raise KeyboardInterrupt(cancellation.reason or "controller cancelled before Agent call")
     workspace = Path(research_workspace(config, client, backend, project))
@@ -93,7 +95,8 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
         if cancellation.is_cancelled:
             raise KeyboardInterrupt(cancellation.reason or "controller cancelled before Agent call")
         result = call_agent(config, backend, role="builder" if phase == "closing" else "reviewer", prompt=prompt, result_model=model,
-                            workspace=workspace, timeout_seconds=timeout, phase=phase, cancellation=cancellation)
+                            workspace=workspace, timeout_seconds=timeout, phase=phase, cancellation=cancellation,
+                            **({"worker": worker} if worker is not None else {}))
         if result.status == "cancelled":
             cancellation.cancel(result.error or result.process.cancel_reason or "Agent call interrupted")
         if result.status == "success":
@@ -115,6 +118,66 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
         raise
 
 
+def _review_waves(project, targets):
+    facts = {fact.id: fact for fact in project.facts}
+    intents = {intent.id: intent for intent in project.intents}
+    remaining = list(targets)
+    while remaining:
+        pending_facts = {object_id for kind, object_id in remaining if kind == "fact"}
+        wave = []
+        for kind, object_id in remaining:
+            fact = facts.get(object_id) if kind == "fact" else None
+            dependencies = fact.audit.premise_ids if fact and fact.audit else intents[object_id].from_ if kind == "intent" else []
+            if not pending_facts.intersection(dependencies):
+                wave.append((kind, object_id))
+        if not wave:
+            raise ValueError("review targets contain a premise cycle")
+        yield wave
+        selected = set(wave)
+        remaining = [target for target in remaining if target not in selected]
+
+
+def _review_items(config, client, project_id, targets, cancellation):
+    for kind, object_id in targets:
+        if cancellation.is_cancelled:
+            return
+        project = client.get_project(project_id)
+        if project.project.status not in ("active", "draining"):
+            return
+        if kind == "intent" and project.project.audit.phase == "finalizing":
+            continue
+        timeout = min(config.controller.timeouts.overseer, _remaining(project.project.audit.final_deadline))
+        if timeout <= 0:
+            return
+        inputs = client.get_review_input(project_id, kind, object_id)
+        records = [record for record in client.get_audit(project_id).records
+                   if record.phase == "overseer" and record.object_type == kind and record.object_id == object_id]
+        if any(record.attempt_status == "success" and inputs["input_digest"] in (record.input_digest, record.output_digest) for record in records):
+            continue
+        attempts = sum(record.input_digest == inputs["input_digest"] for record in records)
+        if attempts < config.controller.review.max_attempts:
+            yield kind, object_id, inputs, attempts, project, timeout
+
+
+def _node_reviews(config, client, backend, project, targets, cancellation):
+    project_id = project.project.id
+
+    def invoke(item, worker, child):
+        _, _, inputs, _, current, timeout = item
+        return _invoke(config, client, backend, current, phase="overseer", context=inputs["context"],
+                       model=NodeAssessment, timeout=timeout, cancellation=child,
+                       **({"worker": worker} if worker is not None else {}))
+
+    if not config.role_pools:
+        for item in _review_items(config, client, project_id, targets, cancellation):
+            yield item, invoke(item, None, cancellation)
+        return
+    for wave in _review_waves(project, targets):
+        items = _review_items(config, client, project_id, wave, cancellation)
+        with closing(run_pooled(config, "overseer", items, invoke, cancellation)) as results:
+            yield from results
+
+
 def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, cancellation=None, retry_review: str | None = None) -> dict:
     if config.controller is None or config.runtime.execution != "local":
         raise ValueError("audit monitor requires controller configuration and local execution")
@@ -134,44 +197,34 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
     targets = [("fact", fact.id) for fact in project.facts if fact.id not in ("origin", "goal")]
     if project.project.audit.phase != "finalizing":
         targets += [("intent", intent.id) for intent in project.intents if intent.to is None]
-    for kind, object_id in targets:
-        if cancellation.is_cancelled:
-            break
-        timeout = min(config.controller.timeouts.overseer, _remaining(project.project.audit.final_deadline))
-        if timeout <= 0:
-            break
-        inputs = client.get_review_input(project_id, kind, object_id)
-        records = [record for record in client.get_audit(project_id).records
-                   if record.phase == "overseer" and record.object_type == kind and record.object_id == object_id]
-        if any(record.attempt_status == "success" and inputs["input_digest"] in (record.input_digest, record.output_digest) for record in records):
-            continue
-        attempts = sum(record.input_digest == inputs["input_digest"] for record in records)
-        if attempts >= config.controller.review.max_attempts:
-            continue
-        result, artifact = _invoke(config, client, backend, project, phase="overseer", context=inputs["context"],
-                                   model=NodeAssessment, timeout=timeout, cancellation=cancellation)
-        success = result.status == "success"
-        data = NodeAssessment.model_validate(result.data) if success else None
-        body = AuditRecordRequest(
-            record_key=f"overseer:{kind}:{object_id}:{inputs['input_digest']}:{attempts + 1}",
-            object_type=kind, object_id=object_id, input_digest=inputs["input_digest"], phase="overseer",
-            session=result.session, attempt_status="success" if success else "error",
-            decision=data.decision if data else None, error=None if success else result.error or result.status,
-            result=result.data, artifacts=[str(artifact)], fact_audit=data.fact_audit if data else None, hint=data.hint if data else None,
-        )
-        response = client.record_audit_review(project_id, body)
-        if response.status_code in (400, 409, 422):
-            current = client.get_review_input(project_id, kind, object_id)
-            if current["input_digest"] != inputs["input_digest"]:
-                continue  # 图在执行期变化，下一轮读取新输入，不复用旧判断。
-            body = body.model_copy(update={"attempt_status": "error", "decision": None, "fact_audit": None,
-                                          "hint": None, "error": f"复核结果未满足服务端证据约束：{response.text}"})
+    with closing(_node_reviews(config, client, backend, project, targets, cancellation)) as results:
+        for item, (result, artifact) in results:
+            kind, object_id, inputs, attempts, _, _ = item
+            project = client.get_project(project_id)
+            if project.project.status not in ("active", "draining"):
+                break
+            success = result.status == "success"
+            data = NodeAssessment.model_validate(result.data) if success else None
+            body = AuditRecordRequest(
+                record_key=f"overseer:{kind}:{object_id}:{inputs['input_digest']}:{attempts + 1}",
+                object_type=kind, object_id=object_id, input_digest=inputs["input_digest"], phase="overseer",
+                session=result.session, attempt_status="success" if success else "error",
+                decision=data.decision if data else None, error=None if success else result.error or result.status,
+                result=result.data, artifacts=[str(artifact)], fact_audit=data.fact_audit if data else None, hint=data.hint if data else None,
+            )
             response = client.record_audit_review(project_id, body)
-        if response.status_code == 409 and _remaining(project.project.audit.final_deadline) <= 0:
-            break
-        _require_ok(response, "apply Overseer review")
-        reviewed += 1
-        project = client.get_project(project_id)
+            if response.status_code in (400, 409, 422):
+                current = client.get_review_input(project_id, kind, object_id)
+                if current["input_digest"] != inputs["input_digest"]:
+                    continue  # 图在执行期变化，下一轮读取新输入，不复用旧判断。
+                body = body.model_copy(update={"attempt_status": "error", "decision": None, "fact_audit": None,
+                                              "hint": None, "error": f"复核结果未满足服务端证据约束：{response.text}"})
+                response = client.record_audit_review(project_id, body)
+            if response.status_code == 409 and _remaining(project.project.audit.final_deadline) <= 0:
+                break
+            _require_ok(response, "apply Overseer review")
+            reviewed += 1
+            project = client.get_project(project_id)
 
     if cancellation.is_cancelled:
         return {"project_id": project_id, "status": "cancelled", "reviewed": reviewed}

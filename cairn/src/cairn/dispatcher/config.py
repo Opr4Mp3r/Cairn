@@ -4,14 +4,16 @@ from decimal import Decimal, InvalidOperation
 import json
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 
 TaskType = Literal["reason", "explore", "bootstrap"]
+PoolRole = Literal["reason", "explore", "bootstrap", "build", "preflight", "seed_review", "overseer", "closing", "final_review"]
 WorkerType = Literal["claudecode", "codex", "pi", "grok", "mock"]
+RolePools = dict[PoolRole, Annotated[dict[WorkerType, Annotated[int, Field(strict=True, gt=0)]], Field(min_length=1)]]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
 ExecutionMode = Literal["container", "local"]
@@ -184,14 +186,14 @@ class WorkerConfig(BaseModel):
 
     name: str
     type: WorkerType
-    task_types: list[TaskType]
+    task_types: list[PoolRole]
     max_running: int = Field(gt=0)
     priority: int = Field(ge=0)
     env: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("task_types")
     @classmethod
-    def validate_task_types(cls, value: list[TaskType]) -> list[TaskType]:
+    def validate_task_types(cls, value: list[PoolRole]) -> list[PoolRole]:
         if not value:
             raise ValueError("task_types must not be empty")
         if len(set(value)) != len(value):
@@ -296,14 +298,48 @@ class DispatchConfig(BaseModel):
     container: ContainerConfig | None = None
     local: LocalConfig | None = None
     common_env: dict[str, str] = Field(default_factory=dict)
-    workers: list[WorkerConfig]
+    workers: list[WorkerConfig] = Field(default_factory=list)
     controller: ControllerConfig | None = None
+    role_pools: RolePools | None = None
 
     @model_validator(mode="before")
     @classmethod
     def merge_common_env(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        if data.get("role_pools") is not None:
+            pools = TypeAdapter(RolePools).validate_python(data["role_pools"])
+            runtime = data.get("runtime", {})
+            runtime = runtime.model_dump() if isinstance(runtime, BaseModel) else dict(runtime)
+            if runtime.get("execution", "container") != "local":
+                raise ValueError("role_pools requires runtime.execution=local")
+            required = {"explore", "reason"}
+            if data.get("controller") is not None:
+                required.update({"preflight", "seed_review", "overseer", "closing", "final_review"})
+            missing = sorted(required - pools.keys())
+            if missing:
+                raise ValueError(f"role_pools missing required roles: {', '.join(missing)}")
+            merged = dict(data)
+            merged["workers"] = [
+                {"name": f"pool-{role}-{harness}", "type": harness, "task_types": [role],
+                 "max_running": count, "priority": 0, "env": {}}
+                for role, members in pools.items() for harness, count in members.items()
+            ]
+            # Reason and Bootstrap each make one project-wide decision at a time.
+            capacity = sum(pools["explore"].values()) + 1
+            runtime["max_project_workers"] = capacity
+            runtime["max_workers"] = capacity * runtime.get("max_running_projects", 1)
+            merged["runtime"] = runtime
+            if data.get("controller") is not None:
+                controller = data["controller"]
+                controller = controller.model_dump() if isinstance(controller, BaseModel) else dict(controller)
+                build_role = "build" if "build" in pools else "closing"
+                controller["roles"] = {
+                    "builder": f"pool-{build_role}-{next(iter(pools[build_role]))}",
+                    "reviewer": f"pool-preflight-{next(iter(pools['preflight']))}",
+                }
+                merged["controller"] = controller
+            return merged
         common_env = data.get("common_env")
         if common_env is None:
             common_env = {}
@@ -338,6 +374,11 @@ class DispatchConfig(BaseModel):
             raise ValueError("workers must not be empty")
         if self.runtime.max_project_workers > self.runtime.max_workers:
             raise ValueError("max_project_workers cannot exceed max_workers")
+        if self.role_pools is not None:
+            from cairn.dispatcher.workers.registry import get_driver
+
+            for worker in self.workers:
+                get_driver(worker.type, self.runtime.execution)
         if self.controller is not None:
             from cairn.dispatcher.workers.registry import get_driver
 
@@ -347,6 +388,14 @@ class DispatchConfig(BaseModel):
                     raise ValueError(f"controller role {role} references unknown worker {name!r}")
                 get_driver(by_name[name].type, self.runtime.execution)
         return self
+
+    def pool_workers(self, role: str) -> list[WorkerConfig]:
+        if self.role_pools is None:
+            return []
+        return [worker for worker in self.workers if worker.task_types == [role]]
+
+    def pool_capacity(self, role: str) -> int:
+        return sum(worker.max_running for worker in self.pool_workers(role))
 
     @model_validator(mode="after")
     def validate_execution_mode(self) -> "DispatchConfig":

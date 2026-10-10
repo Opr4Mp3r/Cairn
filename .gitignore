@@ -5,3 +5,11 @@ __pycache__/
 datas/
 dispatch.yaml
 dispatch.builder.yaml
+
+# 项目 Skill 和分发包入库，Agent 的运行材料与本机上下文保留在本地。
+/.claude/*
+!/.claude/skills/
+!/.claude/artifacts/
+/.claude/artifacts/*
+!/.claude/artifacts/cairn-builder.skill
+/docs/diagrams/.*.bkp

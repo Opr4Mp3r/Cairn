@@ -209,6 +209,41 @@ def kritt_probe(config_path: Path, target_name: str, goal: str, scan_id: int | N
     click.echo(json.dumps({key: summary[key] for key in ("status", "scan_id", "commit_sha", "calls", "queries", "output")}, ensure_ascii=False))
 
 
+@main.command("prepare")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--target", "target_name", required=True)
+@click.option("--goal", required=True)
+@click.option("--scan-id", type=click.IntRange(min=1))
+@click.option("--run-dir", type=click.Path(file_okay=False, path_type=Path), required=True)
+@click.option("--view", "view_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def prepare(config_path, target_name, goal, scan_id, run_dir, view_path):
+    """准备固定 Kritt 材料和计划格式，供原生 Agent 会话读取；不调用模型。"""
+    from cairn.controller.builder import prepare_builder
+    from cairn.dispatcher.config import DispatchConfig
+    configure_logging("INFO")
+    try:
+        result = prepare_builder(DispatchConfig.load(config_path), target_name=target_name,
+                                 user_goal=goal, run_dir=run_dir, scan_id=scan_id, view_path=view_path)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
+@main.command("start")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--run-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
+def start(config_path, run_dir):
+    """提交原生会话写好的 plan.json；返回修订意见或后台研究地址。"""
+    from cairn.controller.native import start_prepared
+    try:
+        result = start_prepared(config_path, run_dir)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False))
+    if result["status"] in {"failed", "interrupted"}:
+        raise click.ClickException(result.get("error", result.get("cleanup_error", "研究启动失败")))
+
+
 @main.command("builder")
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--target", "target_name", required=True)
@@ -225,6 +260,7 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
     from cairn.dispatcher.runtime.cancellation import TaskCancellation
     from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
 
+    configure_logging("INFO")
     folder = run_dir.expanduser().resolve()
     token = TaskCancellation()
     registry = folder / "agent-processes"
@@ -236,8 +272,8 @@ def builder(config_path, target_name, goal, scan_id, run_dir, view_path):
         if not sys.stdin.isatty():
             raise ValueError("需要补充信息后重新运行：" + "；".join(questions))
         for question in questions:
-            click.echo(question)
-        return click.prompt("请补充", type=str)
+            click.echo(question, err=True)
+        return click.prompt("请补充", type=str, err=True)
 
     def terminate(_signum, _frame):
         nonlocal interrupted

@@ -58,6 +58,7 @@ class DispatcherLoop:
         self.runtime_project_ids: set[str] = set()
         self.worker_unhealthy_until: dict[str, float] = {}
         self.worker_rejected_until: dict[tuple[str, str, str], float] = {}
+        self.pool_cursors: dict[tuple[str, str], int] = {}
         self._log_state: dict[str, tuple[int, str, tuple[object, ...]]] = {}
         self._cleanup_pending: set[str] = set()
         self._inactive_cleanup_done: dict[str, str] = {}
@@ -259,6 +260,9 @@ class DispatcherLoop:
                     return
                 if self._try_dispatch_project(summary):
                     dispatched = True
+                    if self.config.role_pools is not None:
+                        running_projects.append(summary)
+                        idle_projects = [project for project in idle_projects if project.id != summary.id]
                     break
 
     def _ordered_projects(self, summaries: list[ProjectSummary]) -> list[ProjectSummary]:
@@ -319,7 +323,10 @@ class DispatcherLoop:
             reason_trigger = self._reason_trigger(project)
             if reason_trigger is not None:
                 export_yaml = self.client.export_project(summary.id)
-                return self._dispatch_reason(project, export_yaml, reason_trigger)
+                if self._dispatch_reason(project, export_yaml, reason_trigger):
+                    return True
+                if self.config.role_pools is None:
+                    return False
         running_intent_ids = self._project_running_explore_intents(summary.id)
         unclaimed_intents = [
             intent
@@ -583,13 +590,18 @@ class DispatcherLoop:
         blocked_unhealthy: list[str] = []
         blocked_rejected: list[str] = []
         blocked_task_type: list[str] = []
-        running_counts = self._worker_counts()
-        for worker in self.config.workers:
+        pooled = self.config.role_pools is not None
+        workers = self.config.pool_workers(task_type) if pooled else self.config.workers
+        running_counts = self._worker_counts(project_id if pooled else None)
+        decision_running = pooled and task_type in ("reason", "bootstrap") and any(
+            task.project_id == project_id and task.task_type == task_type for task in self.futures.values()
+        )
+        for worker in workers:
             if task_type not in worker.task_types:
                 blocked_task_type.append(worker.name)
                 continue
             running = running_counts.get(worker.name, 0)
-            if running >= worker.max_running:
+            if decision_running or running >= worker.max_running:
                 blocked_busy.append(f"{worker.name}({running}/{worker.max_running})")
                 continue
             unhealthy_until = self.worker_unhealthy_until.get(worker.name, 0)
@@ -618,7 +630,15 @@ class DispatcherLoop:
                 blocked_rejected=blocked_rejected,
                 blocked_task_type=blocked_task_type,
             )
-        ordered = choose_worker(candidates, running_counts)
+        if pooled:
+            cursors = self.__dict__.setdefault("pool_cursors", {})
+            key = (project_id, task_type)
+            offset = cursors.get(key, 0)
+            positions = {worker.name: index for index, worker in enumerate(workers)}
+            ordered = sorted(candidates, key=lambda worker: (positions[worker.name] - offset) % len(workers))
+            cursors[key] = (positions[ordered[0].name] + 1) % len(workers)
+        else:
+            ordered = choose_worker(candidates, running_counts)
         LOG.debug(
             "worker selection project=%s task=%s candidates=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
             project_id,
@@ -638,9 +658,11 @@ class DispatcherLoop:
             blocked_task_type=blocked_task_type,
         )
 
-    def _worker_counts(self) -> dict[str, int]:
+    def _worker_counts(self, project_id: str | None = None) -> dict[str, int]:
         counts: dict[str, int] = {}
         for task in self.futures.values():
+            if project_id is not None and task.project_id != project_id:
+                continue
             counts[task.worker_name] = counts.get(task.worker_name, 0) + 1
         return counts
 

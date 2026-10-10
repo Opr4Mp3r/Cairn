@@ -111,7 +111,8 @@ def run_bootstrap_task(
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
-        research_receipt(container_manager, container_name, project, worker, phase="bootstrap", session=session, prompt=prompt, process=first)
+        research_receipt(container_manager, container_name, project, worker, phase="bootstrap", session=session, prompt=prompt,
+                         process=first, intent_id=intent.id)
         cancelled = cancel_reason(first, cancellation)
         if cancelled is not None:
             LOG.info(
@@ -310,7 +311,8 @@ def _try_conclude_fallback(
         cancellation=cancellation,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
-    research_receipt(container_manager, container_name, project, worker, phase="bootstrap_conclude", session=session, prompt=prompt, process=result)
+    research_receipt(container_manager, container_name, project, worker, phase="bootstrap_conclude", session=session, prompt=prompt,
+                     process=result, intent_id=intent.id)
     cancelled = cancel_reason(result, cancellation)
     if cancelled is not None:
         LOG.info(
