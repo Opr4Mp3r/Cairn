@@ -140,7 +140,7 @@ def test_agent_inputs_strip_real_scan19_fingerprints_without_changing_source_met
     assert graph["project"]["audit"]["policy"] == policy
 
 
-@pytest.mark.parametrize("stop_after", ["reviewed_fact", "draining", "completed"])
+@pytest.mark.parametrize("stop_after", ["reviewed_fact", "draining", "completed", "closing_completed", "budget_exhausted"])
 def test_owned_audit_dispatcher_and_monitor_write_and_review_a_new_fact(probe, monkeypatch, stop_after):
     config, prepared, _, _ = ready(probe)
     config.server = "http://127.0.0.1:0"
@@ -151,6 +151,12 @@ def test_owned_audit_dispatcher_and_monitor_write_and_review_a_new_fact(probe, m
         config.controller.budget.research_seconds = 2
         config.controller.budget.drain_seconds = 20
         monkeypatch.setenv("RECONNECT_EXPLORE_DELAY", "3")
+    if stop_after in {"closing_completed", "budget_exhausted"}:
+        config.controller.budget.research_seconds = 4
+        config.controller.budget.drain_seconds = 20
+        config.controller.budget.final_review_seconds = 30
+        monkeypatch.setenv("RECONNECT_EXPLORE_DELAY", "5")
+    monkeypatch.setenv("RECONNECT_OUTCOME", stop_after)
     if stop_after == "completed":
         monkeypatch.setenv("RECONNECT_COMPLETE", "1")
         from cairn.controller import research
@@ -195,9 +201,20 @@ if '"output_schema"' in prompt:
         result = {"decision": "approved", "reason": "checked source", "fact_audit": None, "hint": None}
         if fact is not None:
             result["fact_audit"] = {**fact, "review_status": "verified", "validation_level": "source_analysis", "review_notes": "matched source"}
+            if os.environ.get("RECONNECT_OUTCOME") == "budget_exhausted":
+                result.update(decision="needs_evidence", reason="insufficient source proof")
+                result["fact_audit"]["review_status"] = "unverified"
     elif "request" in context:
         result = {"decision": "approved", "reason": "static source checked", "proof_ids": context["request"]["from"],
                   "checks": {key: True for key in ["effect", "deployment", "attacker_capabilities", "scope", "cvss", "evidence"]}, "cvss_vector": None}
+    elif "kind" in props:
+        seeds = set(context["graph"]["project"]["audit"]["seed_ids"].values())
+        facts = [fact["id"] for fact in context["graph"]["facts"]
+                 if fact["id"] not in {"origin", "goal", *seeds}
+                 and fact.get("audit", {}).get("review_status") == "verified"]
+        candidate = os.environ.get("RECONNECT_OUTCOME") == "closing_completed" and bool(facts)
+        result = {"kind": "candidate" if candidate else "no_candidate", "from": facts[:1] if candidate else [],
+                  "description": "assess only the final graph"}
     else:
         raise AssertionError("No closing/final review should be needed in this stopped test")
 else:
@@ -252,7 +269,7 @@ print(json.dumps(result))
 
     def report(event):
         nonlocal watcher
-        if stop_after != "completed" and watcher is None and event.get("project_id"):
+        if stop_after in {"reviewed_fact", "draining"} and watcher is None and event.get("project_id"):
             watcher = threading.Thread(target=watch, args=(event["server"], event["project_id"]))
             watcher.start()
 
@@ -264,7 +281,9 @@ print(json.dumps(result))
         timer.cancel();timer.join()
         if watcher is not None:
             watcher.join(timeout=5)
-    assert result["status"] == ("completed" if stop_after == "completed" else "stopped") and not failures
+    expected = "completed" if stop_after in {"completed", "closing_completed"} else (
+        "budget_exhausted" if stop_after == "budget_exhausted" else "stopped")
+    assert result["status"] == result["project_status"] == expected and not failures
     assert set(result["processes"]) == {"server", "dispatcher", "controller"}
     assert all(item["returncode"] is not None for item in result["processes"].values())
     stored = json.loads((folder / "result.json").read_text())
@@ -273,6 +292,29 @@ print(json.dumps(result))
         assert any(fact["id"] == observed[0].id for fact in stored["facts"])
     elif stop_after == "draining":
         assert observed == ["draining"]
+    audit = json.loads((folder / "audit.json").read_text())
+    completions = json.loads((folder / "completions.json").read_text())
+    assert audit["phase"] == result["audit_phase"]
+    assert audit["termination_reason"] == result["termination_reason"]
+    assert set(result["results"]) == {"project", "graph", "timeline", "audit", "completions"}
+    if expected == "completed":
+        approved = next(request for request in completions if request["status"] == "approved")
+        assert approved["review_session"] != approved["source_session"]
+        assert any(record["phase"] == "final_review" and record["decision"] == "approved" for record in audit["records"])
+        assert any(intent["to"] == "goal" for intent in stored["intents"])
+        if stop_after == "closing_completed":
+            assert audit["closing"]["request_id"] == approved["id"]
+            assert audit["closing"]["result"]["kind"] == "candidate"
+    else:
+        assert not any(request["status"] == "approved" for request in completions)
+        assert not any(intent["to"] == "goal" for intent in stored["intents"])
+    if stop_after in {"closing_completed", "budget_exhausted"}:
+        seeds = set(audit["seed_ids"].values())
+        assert any(fact["id"] not in {"origin", "goal", *seeds} for fact in stored["facts"])
+        assert audit["closing"]["status"] == "success"
+    for process in result["processes"].values():
+        with pytest.raises(ProcessLookupError):
+            os.kill(process["pid"], 0)
     assert list((folder / "work" / result["project_id"] / "controller-reviews").glob("overseer-*/result.json"))
 
 
@@ -291,6 +333,9 @@ def test_monitor_exit_stops_owned_audit_and_reaps_services(probe, monkeypatch):
     assert state["status"] == "failed" and state["processes"]["controller"]["returncode"] == 7
     assert all(item["returncode"] is not None for item in state["processes"].values())
     assert json.loads((folder / "result.json").read_text())["project"]["status"] == "stopped"
+    assert state["project_status"] == "stopped"
+    assert json.loads((folder / "audit.json").read_text())["project_id"] == state["project_id"]
+    assert json.loads((folder / "completions.json").read_text()) == []
 
 
 def test_overseer_input_identifies_unsupported_premises_without_changing_server_context(probe, api, monkeypatch):

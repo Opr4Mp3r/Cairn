@@ -142,6 +142,11 @@ def save_results(client: CairnClient, project_id: str, folder: Path) -> dict[str
     _write(paths["project"], project.model_dump(mode="json", by_alias=True))
     paths["graph"].write_text(client.export_project(project_id), encoding="utf-8")
     paths["timeline"].write_text(client.export_project(project_id, format="timeline"), encoding="utf-8")
+    if project.project.audit is not None:
+        paths.update(audit=folder / "audit.json", completions=folder / "completions.json")
+        _write(paths["audit"], client.get_audit(project_id).model_dump(mode="json", by_alias=True))
+        _write(paths["completions"], [request.model_dump(mode="json", by_alias=True)
+                                     for request in client.list_completions(project_id)])
     return {key: str(path) for key, path in paths.items()}
 
 
@@ -205,11 +210,13 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
                 raise RuntimeError("Server exited; see server.log")
             project = client.get_project(state["project_id"])
             progress = {
+                "project_status": project.project.status,
                 "fact_count": sum(fact.id not in {"origin", "goal"} for fact in project.facts),
                 "open_intent_count": sum(intent.to is None for intent in project.intents),
             }
             if project.project.audit is not None:
                 progress["audit_phase"] = project.project.audit.phase
+                progress["termination_reason"] = project.project.audit.termination_reason
             state.update(progress)
             if project.project.status not in ("active", "draining"):
                 state["status"] = project.project.status
@@ -241,6 +248,8 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
                     response = client.set_project_status(state["project_id"], "stopped")
                     if not response.ok:
                         state["stop_error"] = f"{response.status_code}: {response.text}"
+                    else:
+                        state["project_status"] = "stopped"
                 except Exception as stop_error:
                     state["stop_error"] = f"{type(stop_error).__name__}: {stop_error}"
         raise
@@ -250,6 +259,11 @@ def run_research(config: DispatchConfig, prepared: dict, *, cancellation: TaskCa
             if client is not None and "project_id" in state:
                 try:
                     state["results"] = save_results(client, state["project_id"], folder)
+                    saved = json.loads(Path(state["results"]["project"]).read_text())
+                    state["project_status"] = saved["project"]["status"]
+                    metadata = saved["project"].get("audit")
+                    if metadata is not None:
+                        state.update(audit_phase=metadata["phase"], termination_reason=metadata["termination_reason"])
                 except Exception as exc:
                     state["export_error"] = f"{type(exc).__name__}: {exc}"
             token.cancel("research shutdown")

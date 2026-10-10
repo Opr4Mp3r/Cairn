@@ -1,4 +1,4 @@
-# R-CP2：Builder取材与AuditPlan → audit研究与独立监督；完整交付待R-CP3。
+# Builder取材与AuditPlan → audit研究、旁路监督和独立结案。
 server: "http://127.0.0.1:0"
 runtime:
   execution: local
@@ -36,6 +36,12 @@ controller:
     preflight: 240
     seed_review: 240
     overseer: 180
+    closing: 180
+    final_review: 240
+  budget:
+    research_seconds: 1800
+    drain_seconds: 120
+    final_review_seconds: 600
   kritt:
     dsn_env: CAIRN_KRITT_READONLY_DSN
     targets:

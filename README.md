@@ -196,12 +196,12 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 
 ### Kritt 与本地审计入口
 
-Kritt 的已交付 generic 流程记录于[正向 MVP 开发约定](docs/specs/kritt-builder-mvp.md)。当前按 [v0.5 接回方案](docs/specs/kritt-audit-reconnect-mvp.md)开发：R-CP1、R-CP2 已验收通过，Builder 同会话自主取材并形成 AuditPlan，接入 audit 研究与旁路监督；完整结案交付仍待 R-CP3。
+Kritt 的已交付 generic 流程记录于[正向 MVP 开发约定](docs/specs/kritt-builder-mvp.md)。当前按 [v0.5 接回方案](docs/specs/kritt-audit-reconnect-mvp.md)开发：R-CP1、R-CP2 已验收通过，Builder 同会话自主取材并形成 AuditPlan，接入 audit 研究与旁路监督；R-CP3 已验收通过，包含独立结案、预算收尾与五份结果归档。
 
 | 入口或文档 | 当前用途 |
 |---|---|
 | [Kritt 取材探针](docs/kritt-probe.md) | B-CP1 已完成，只读查询与源码观察，不创建研究项目 |
-| [Builder 审计入口](docs/builder-prepare.md) | 同会话取材、独立预审/种子复核、audit 研究和旁路监督；当前为 R-CP2 中间态 |
+| [Builder 审计入口](docs/builder-prepare.md) | 同会话取材、预审/种子复核、研究/监督、独立结案及结果归档；R-CP3 已验收通过 |
 | [本地 audit 模式](docs/audit-local.md) | 已完成的独立审计路径，包含复核、终审及预算；Kritt 接回方案将复用这些能力 |
 
 Kritt使用[专用配置示例](dispatch.builder.example.yaml)。复制后填好目标源码、manifest及只读连接；当前命令生成方案后启动本次 Server、Dispatcher 和 Controller monitor：
@@ -212,13 +212,13 @@ uv run --project cairn cairn builder --config dispatch.builder.yaml --target zen
   --run-dir /absolute/path/to/new-run
 ```
 
-准备条件与当前中间态见[Builder使用指南](docs/builder-prepare.md)。
+准备条件、时间预算、结果复盘及 Grok 切换见[Builder使用指南](docs/builder-prepare.md)。
 
-2026-10-10：R-CP2 已验收通过并获用户提交授权；R-CP3 尚未开发，接回尚未完整交付。
+2026-10-10：R-CP2 已验收并提交 `17b6d72`；R-CP3 已验收通过，接回 MVP 完整交付。
 
 ### Local code audit MVP（已完成的 audit 路径）
 
-以下命令运行已有源码型审计模式，包含独立批准与 `budget_exhausted`。Kritt 的 R-CP2 入口复用这里的准备、研究和监督语义；完整结案交付仍待 R-CP3。
+以下命令运行已有源码型审计模式，包含独立批准与 `budget_exhausted`。Kritt 的 R-CP2 入口复用这里的准备、研究和监督语义；R-CP3 已验收通过，包含独立结案、预算收尾与五份结果归档。
 
 The audit controller shares Cairn's worker drivers and runs alongside the Server and Dispatcher. The example uses only an already-configured local Claude Code CLI:
 

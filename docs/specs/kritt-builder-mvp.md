@@ -2,7 +2,7 @@
 
 日期：2026-10-07。版本：v0.3，记录已交付的 generic 正向功能流程。
 
-**2026-10-10 更新：B-CP1—B-CP5 已完成。后续开发改按 [Kritt Builder 接回 audit 的 MVP 方案](kritt-audit-reconnect-mvp.md) v0.5；本文件下文保留为 v0.3 历史范围，不再作为后续开发指令。当前 R-CP1 已实现方案准备，audit 研究接回尚未完整交付。**
+**2026-10-10 更新：B-CP1—B-CP5 已完成。后续开发改按 [Kritt Builder 接回 audit 的 MVP 方案](kritt-audit-reconnect-mvp.md) v0.5；本文件下文保留为 v0.3 历史范围，不再作为后续开发指令。R-CP1、R-CP2 已验收并提交，R-CP3 已验收通过。**
 
 ## 1 范围
 
