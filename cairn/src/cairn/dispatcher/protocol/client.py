@@ -34,10 +34,12 @@ class ApiResult:
 
 
 class CairnClient:
-    def __init__(self, base_url: str, timeout: float = 10.0, *, trust_env: bool = True):
+    def __init__(self, base_url: str, timeout: float = 10.0, *, trust_env: bool = True,
+                 headers: dict[str, str] | None = None):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._trust_env = trust_env
+        self._headers = headers or {}
         self._summary_adapter = TypeAdapter(list[ProjectSummary])
         self._local = threading.local()
         self._sessions: dict[int, requests.Session] = {}
@@ -54,6 +56,29 @@ class CairnClient:
         response = self._session().get(self._url("/projects"), timeout=self._timeout)
         response.raise_for_status()
         return self._summary_adapter.validate_python(response.json())
+
+    def service_health(self) -> dict:
+        response = self._session().get(self._url("/runtime/health"), timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def submit_audit(self, body: dict) -> ApiResult:
+        return self._request_json("POST", "/audit-submissions", body)
+
+    def revise_submission(self, submission_id: str, body: dict) -> ApiResult:
+        return self._request_json("PUT", f"/audit-submissions/{submission_id}", body)
+
+    def get_submission(self, submission_id: str) -> dict:
+        response = self._session().get(self._url(f"/audit-submissions/{submission_id}"), timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def get_execution_config(self, project_id: str) -> dict | None:
+        response = self._session().get(self._url(f"/projects/{project_id}/execution-config"), timeout=self._timeout)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
 
     def get_project(self, project_id: str) -> ProjectDetail:
         response = self._session().get(self._url(f"/projects/{project_id}"), timeout=self._timeout)
@@ -214,6 +239,7 @@ class CairnClient:
 
         session = requests.Session()
         session.trust_env = self._trust_env
+        session.headers.update(self._headers)
         adapter = HTTPAdapter(pool_connections=64, pool_maxsize=64, pool_block=False)
         session.mount("http://", adapter)
         session.mount("https://", adapter)

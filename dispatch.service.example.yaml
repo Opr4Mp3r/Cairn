@@ -1,0 +1,50 @@
+# 用户手动 cairn up；prepared run 通过纯客户端 cairn submit 提交。
+server: "http://127.0.0.1:8000"
+runtime:
+  execution: local
+  worker_healthcheck: disabled
+  max_running_projects: 1
+  interval: 3
+  healthcheck_timeout: 15
+  prompt_group: default
+tasks:
+  # 通用配置字段；Builder导入的项目关闭bootstrap。
+  bootstrap:
+    timeout: 120
+    conclude_timeout: 30
+  reason:
+    timeout: 120
+  explore:
+    timeout: 300
+    conclude_timeout: 60
+# 各角色容量等于其 harness 数量之和；模型沿用本机 CLI 配置。
+role_pools:
+  explore: {claudecode: 1}
+  reason: {claudecode: 1}
+  preflight: {claudecode: 1}
+  seed_review: {claudecode: 1}
+  overseer: {claudecode: 1}
+  closing: {claudecode: 1}
+  final_review: {claudecode: 1}
+controller:
+  research_prompt_group: audit
+  timeouts:
+    build: 300
+    preflight: 240
+    seed_review: 240
+    overseer: 180
+    closing: 180
+    final_review: 240
+  budget:
+    research_seconds: 1800
+    drain_seconds: 120
+    final_review_seconds: 600
+  kritt:
+    dsn_env: CAIRN_KRITT_READONLY_DSN
+    targets:
+      zentao:
+        repo_full: easysoft/zentaopms
+        scan_id: 19
+        commit: d5bfff8c91cea48018275381e0a127ed6fa5c79f
+        source_root: ./target-source/zentao
+        source_manifest: ./target-source/zentao-manifest.json

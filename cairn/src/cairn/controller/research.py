@@ -117,7 +117,8 @@ def import_audit_plan(config, client, backend, prepared, *, ask=None, cancellati
         "reference_paths": [entry["path"] for entry in json.loads(Path(prepared["references"]).read_text())],
         "plan_path": prepared["plan"], "project_path": str(folder / "project.json"),
         "materials": {"kritt-materials.json": prepared["materials"], "references.json": prepared["references"],
-                      "requirements.json": prepared["requirements"], "query-receipts.json": str(folder / "query-receipts.json"),
+                      "requirements.json": prepared["requirements"],
+                      "query-receipts.json": prepared.get("query_receipts", str(folder / "query-receipts.json")),
                       "research-context.json": str(research_path)},
     }
     add_builder_receipts()

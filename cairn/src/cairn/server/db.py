@@ -114,6 +114,27 @@ CREATE TABLE IF NOT EXISTS audit_completions (
     PRIMARY KEY (project_id, id),
     UNIQUE (project_id, source_key)
 );
+
+CREATE TABLE IF NOT EXISTS service_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    database_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_submissions (
+    id TEXT PRIMARY KEY,
+    run_dir TEXT NOT NULL UNIQUE,
+    revision INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL,
+    prepared_json TEXT NOT NULL,
+    execution_json TEXT NOT NULL,
+    project_id TEXT UNIQUE REFERENCES projects(id),
+    worker_token TEXT,
+    issues_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

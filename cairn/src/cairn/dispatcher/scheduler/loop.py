@@ -41,10 +41,13 @@ class WorkerSelection:
 
 
 class DispatcherLoop:
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, *, managed: bool = False):
         self.config_path = config_path
+        self.managed = managed
+        self.project_configs = {}
+        self.project_executors = {}
         self.config = DispatchConfig.load(config_path)
-        self.client = CairnClient(self.config.server)
+        self.client = CairnClient(self.config.server, trust_env=not managed)
         if self.config.runtime.execution == "local":
             self.container_manager = LocalBackend(self.config.local or LocalConfig())
         else:
@@ -95,13 +98,15 @@ class DispatcherLoop:
             )
         self.executor.shutdown(wait=True)
         self.cleanup_executor.shutdown(wait=True)
+        for executor in getattr(self, "project_executors", {}).values():
+            executor.shutdown(wait=True)
         self.container_manager.close()
         self.client.close()
 
     def run(self, once: bool = False) -> None:
         try:
             self.run_startup_healthchecks()
-            while True:
+            while not getattr(self, "_stopping", False):
                 try:
                     if not self._settings_checked:
                         self._validate_server_settings()
@@ -210,8 +215,30 @@ class DispatcherLoop:
             return path, False
         return path, result.returncode == 0
 
+    def _has_global_capacity(self) -> bool:
+        return getattr(self, "managed", False) or len(self.futures) < self.config.runtime.max_workers
+
+    def _task_config(self, project_id: str) -> DispatchConfig | None:
+        if not getattr(self, "managed", False):
+            return self.config
+        if project_id not in self.project_configs:
+            payload = self.client.get_execution_config(project_id)
+            if payload is None:
+                return None
+            self.project_configs[project_id] = DispatchConfig.model_validate(payload)
+        return self.project_configs[project_id]
+
+    def _task_executor(self, project_id: str):
+        if not getattr(self, "managed", False):
+            return self.executor
+        if project_id not in self.project_executors:
+            self.project_executors[project_id] = ThreadPoolExecutor(
+                max_workers=self._task_config(project_id).runtime.max_project_workers,
+                thread_name_prefix=f"cairn-{project_id}")
+        return self.project_executors[project_id]
+
     def _dispatch_available(self, summaries: list[ProjectSummary]) -> None:
-        if len(self.futures) >= self.config.runtime.max_workers:
+        if not self._has_global_capacity():
             self._log_changed(
                 "dispatch/global",
                 logging.INFO,
@@ -232,12 +259,12 @@ class DispatcherLoop:
         )
 
         dispatched = True
-        while dispatched and len(self.futures) < self.config.runtime.max_workers:
+        while dispatched and self._has_global_capacity():
             dispatched = False
             for summary in running_projects:
                 if self._try_dispatch_project(summary):
                     dispatched = True
-                    if len(self.futures) >= self.config.runtime.max_workers:
+                    if not self._has_global_capacity():
                         return
             if dispatched:
                 continue
@@ -288,7 +315,10 @@ class DispatcherLoop:
                 container_name,
             )
             return False
-        if self._project_running_task_count(summary.id) >= self.config.runtime.max_project_workers:
+        task_config = self._task_config(summary.id)
+        if task_config is None:
+            return False
+        if self._project_running_task_count(summary.id) >= task_config.runtime.max_project_workers:
             self._log_changed(
                 f"{skip_scope}:max_project_workers",
                 logging.INFO,
@@ -432,9 +462,9 @@ class DispatcherLoop:
         if project.project.mode == "audit" and isinstance(claim.data, dict):
             project.project.reason = ProjectMeta.model_validate(claim.data).reason
         try:
-            future = self.executor.submit(
+            future = self._task_executor(project.project.id).submit(
                 run_reason_task,
-                self.config,
+                self._task_config(project.project.id),
                 self.client,
                 self.container_manager,
                 project,
@@ -502,9 +532,9 @@ class DispatcherLoop:
         if project.project.mode == "audit" and isinstance(claim.data, dict):
             intent.lease_id = claim.data.get("lease_id")
         try:
-            future = self.executor.submit(
+            future = self._task_executor(project.project.id).submit(
                 run_bootstrap_task,
-                self.config,
+                self._task_config(project.project.id),
                 self.client,
                 self.container_manager,
                 project,
@@ -562,9 +592,9 @@ class DispatcherLoop:
         if project.project.mode == "audit" and isinstance(claim.data, dict):
             intent.lease_id = claim.data.get("lease_id")
         try:
-            future = self.executor.submit(
+            future = self._task_executor(project.project.id).submit(
                 run_explore_task,
-                self.config,
+                self._task_config(project.project.id),
                 self.client,
                 self.container_manager,
                 project,
@@ -590,8 +620,11 @@ class DispatcherLoop:
         blocked_unhealthy: list[str] = []
         blocked_rejected: list[str] = []
         blocked_task_type: list[str] = []
-        pooled = self.config.role_pools is not None
-        workers = self.config.pool_workers(task_type) if pooled else self.config.workers
+        task_config = self._task_config(project_id)
+        if task_config is None:
+            return WorkerSelection(None, [], [], [], [])
+        pooled = task_config.role_pools is not None
+        workers = task_config.pool_workers(task_type) if pooled else task_config.workers
         running_counts = self._worker_counts(project_id if pooled else None)
         decision_running = pooled and task_type in ("reason", "bootstrap") and any(
             task.project_id == project_id and task.task_type == task_type for task in self.futures.values()
@@ -899,6 +932,13 @@ class DispatcherLoop:
             current_status = inactive_status_by_id.get(project_id)
             if current_status != status:
                 self._inactive_cleanup_done.pop(project_id, None)
+
+        if getattr(self, "managed", False):
+            active = {summary.id for summary in summaries if summary.status in ("active", "draining")}
+            for project_id in list(self.project_executors):
+                if project_id not in active and self._project_running_task_count(project_id) == 0:
+                    self.project_executors.pop(project_id).shutdown(wait=False)
+                    self.project_configs.pop(project_id, None)
 
     def _cancel_inactive_tasks(self, summaries: list[ProjectSummary]) -> None:
         status_by_project = {

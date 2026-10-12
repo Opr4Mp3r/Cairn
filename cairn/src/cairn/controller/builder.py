@@ -189,6 +189,9 @@ def prepare_builder(config: DispatchConfig, *, target_name: str, user_goal: str,
                                                 "--context", str(query_context)]),
         }
         prepared.update(collect_queries(query_context))
+        if config.role_pools:
+            from cairn.controller.submissions import execution_snapshot
+            _write(folder / "execution.json", execution_snapshot(config).model_dump(mode="json"))
         _write(folder / "run.json", prepared)
         LOG.info("Builder：材料已就绪 run=%s plan_schema=%s", folder / "run.json", prepared["plan_schema"])
         return prepared

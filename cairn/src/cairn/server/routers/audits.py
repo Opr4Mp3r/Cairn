@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Request, Header
 
 from cairn.server.db import get_conn
 from cairn.server.models import (AuditCompletion, AuditDetail, AuditMetadata, AuditRecord, AuditRecordRequest,
@@ -75,7 +75,8 @@ def _insert_intent(conn, project_id: str, sources: list[str], description: str, 
 
 
 @router.post("/audits", response_model=ProjectDetail, status_code=201)
-def create_audit(body: CreateAuditRequest):
+def create_audit(body: CreateAuditRequest, request: Request,
+                 x_cairn_submission_token: str | None = Header(default=None)):
     order = _seed_order(body)
     repo = _absolute_path(body.repo_path)
     workspace_root = _absolute_path(body.workspace_root)
@@ -86,6 +87,18 @@ def create_audit(body: CreateAuditRequest):
     seeds = {seed.key: seed for seed in body.seeds}
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        owner = None
+        if getattr(request.app.state, "managed_service", None) is not None:
+            from cairn.server.submissions import creation_owner
+            owner = creation_owner(conn, x_cairn_submission_token)
+            if owner["project_id"]:
+                project_id = owner["project_id"]
+                project = get_project_or_404(conn, project_id)
+                facts = conn.execute("SELECT * FROM facts WHERE project_id=? ORDER BY rowid", (project_id,)).fetchall()
+                hints = conn.execute("SELECT * FROM hints WHERE project_id=? ORDER BY rowid", (project_id,)).fetchall()
+                return ProjectDetail(project=project_meta_from_row(project, conn),
+                    facts=[fact_to_model(conn, row, project_id) for row in facts],
+                    intents=build_intents(conn, project_id), hints=[dict(row) for row in hints])
         project_id = next_project_id(conn)
         now = utcnow()
         conn.execute(
@@ -115,6 +128,8 @@ def create_audit(body: CreateAuditRequest):
             policy_digest=policy_digest, budget=body.budget, seed_ids=seed_ids,
         )
         conn.execute("INSERT INTO audits VALUES (?, ?)", (project_id, json_text(metadata.model_dump(mode="json"))))
+        if owner is not None:
+            conn.execute("UPDATE audit_submissions SET project_id=?,updated_at=? WHERE id=?", (project_id, now, owner["id"]))
         project = get_project_or_404(conn, project_id)
         facts = conn.execute("SELECT * FROM facts WHERE project_id = ? ORDER BY rowid", (project_id,)).fetchall()
         hints = conn.execute("SELECT * FROM hints WHERE project_id = ? ORDER BY rowid", (project_id,)).fetchall()
@@ -124,10 +139,15 @@ def create_audit(body: CreateAuditRequest):
 
 
 @router.post("/projects/{project_id}/audit/start", response_model=AuditMetadata)
-def start_audit(project_id: str):
+def start_audit(project_id: str, request: Request,
+                x_cairn_submission_token: str | None = Header(default=None)):
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         metadata = _audit_or_404(conn, project_id)
+        if getattr(request.app.state, "managed_service", None) is not None:
+            from cairn.server.submissions import creation_owner
+            if creation_owner(conn, x_cairn_submission_token)["project_id"] != project_id:
+                raise HTTPException(403, "Submission does not own this project activation")
         project = get_project_or_404(conn, project_id)
         if metadata.started_at is not None:
             if project["status"] != "active":

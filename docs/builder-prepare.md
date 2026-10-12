@@ -2,7 +2,7 @@
 
 交互开题使用项目内的 [cairn-builder Skill](../.claude/skills/cairn-builder/SKILL.md)。Claude Code 当前会话负责问答、Kritt 只读取材、源码阅读和 AuditPlan 修订；独立 Controller 负责 preflight、seed review 与研究监督。
 
-**服务职责约定（2026-10-12）：Kritt 和 Cairn 服务由用户在终端手动启动，Builder 只使用服务，可以提交并开始研究任务。** 当前代码的 `cairn start` 会启动后台服务，尚不具备连接已有服务的纯提交入口，因此 Skill 现在先交付方案，不再替用户执行 start。新服务/客户端拆分见[待开发方案](specs/task-recovery-mvp.md)；本页后面的 start 命令是由人手动执行的旧兼容用法。
+**服务职责约定（2026-10-12）：Kritt 和 Cairn 服务由用户在终端手动启动，Builder 只使用服务，可以提交并开始研究任务。** REC-CP1 已提供人工 `cairn up` 与纯 HTTP `cairn submit`，使用方法见[在线服务指南](managed-service.md)。现有 Skill 仍先交付方案，完整提交/恢复路由留在 REC-CP4；本页后面的 start 命令是由人手动执行的旧兼容用法。
 
 原 `cairn builder` 保留为已有自动化的批处理兼容入口。研究与结案语义沿用 [v0.5 实现方案](specs/kritt-audit-reconnect-mvp.md)；历史 generic 入口见 [v0.3 记录](specs/kritt-builder-mvp.md)。
 
@@ -44,7 +44,7 @@ export CAIRN_KRITT_READONLY_DSN='host=127.0.0.1 port=5433 dbname=open_kritt user
 
 使用 `/cairn-builder` 时，Claude Code 会先展示当前资源池，主动询问本次沿用还是调整，并按你的自然语言答复直接修改配置。例如：“Explore 用 3 个 Claude Code、2 个 Grok，其余保持当前配置。”没有资源池时，会提出七个角色各一个 Claude Code 的初始方案供选择。已明确的选择不会再次确认，配置后继续开题；也可以只要求配置资源池而不启动研究。
 
-Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及用户手动兼容运行所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；后续纯客户端须随任务提交资源池快照。已有任务不热更新。
+Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及用户手动兼容运行所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；纯客户端随任务提交资源池快照。已有任务不热更新。
 
 资源池用于 `runtime.execution: local`。在顶层 `role_pools` 中为每个角色填写可用 harness 及数量。示例默认所有角色各用一个 `claudecode`；若本机 `claude`、`grok` 均已登录并可调用，可这样配置：
 
@@ -86,7 +86,7 @@ Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同�
 
 Skill 在原会话中处理必要追问，并将问题和答复追加到本 run 的 `requirements.json`。目标应写清效果、部署、攻击者能力和范围；已给出的条件会被保留，未知项仍标为未知。取材只用于开题，适合源码理解、调用链/鉴权梳理、复核既有候选及进一步研究。当前没有统一的应用部署、动态 PoC 或正式漏洞报告生成器。
 
-## prepare / 人工 start 兼容接口
+## prepare / 人工 start 旧兼容接口
 
 Skill 可以使用 prepare。当前 start 会拉起后台服务，只能由用户在终端手动执行，不能作为 Builder 连接现有 Cairn 的客户端。下列命令仍可在仓库根目录使用。
 
@@ -112,7 +112,7 @@ uv run --project cairn cairn start \
   --config dispatch.builder.yaml --run-dir /absolute/path/to/run
 ```
 
-此旧 `start` 启动后台监督进程，等到独立预审结果或项目启动后返回 JSON。它不连接另一套已运行的 Cairn；已有服务时应等待纯提交链路交付，不再启动第二套。用户手动运行后，Skill 可以读取状态文件继续协助：
+此旧 `start` 启动后台监督进程，等到独立预审结果或项目启动后返回 JSON。它不连接另一套已运行的 Cairn；已有执行服务时使用[纯提交入口](managed-service.md)，不要启动第二套。用户手动运行旧接口后，Skill 可以读取状态文件继续协助：
 
 | 返回情形 | 当前会话的下一步 |
 |---|---|

@@ -20,6 +20,92 @@ def main():
 
 
 @main.command()
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--db-path", type=click.Path(dir_okay=False, path_type=Path), required=True)
+def up(config_path: Path, db_path: Path):
+    """人工启动本机 Cairn 执行服务；任务提交不负责服务启停。"""
+    import fcntl
+    from urllib.parse import urlparse
+    import yaml
+
+    from cairn.controller.local import stop_agent_groups
+    from cairn.controller.service import ManagedService
+    from cairn.controller.submissions import execution_snapshot, validate_server_url
+    from cairn.dispatcher.config import DispatchConfig
+    from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
+
+    configure_logging("INFO")
+    service = None
+    original_registry = os.environ.get(REGISTRY_ENV)
+    try:
+        config = DispatchConfig.load(config_path)
+        validate_server_url(config.server)
+        execution_snapshot(config)
+        if config.runtime.execution != "local":
+            raise ValueError("cairn up requires local execution")
+        address = urlparse(config.server)
+        db_path = db_path.expanduser().resolve()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        directory = db_path.parent / (db_path.stem + "-service")
+        directory.mkdir(exist_ok=True)
+        root = Path(config.local.workspace_root).expanduser() if config.local.workspace_root else directory / "work"
+        if not root.is_absolute():
+            root = config_path.resolve().parent / root
+        config.local.workspace_root = str(root.resolve())
+        effective = directory / "config.yaml"
+        registry = directory / "agent-processes"
+        with Path(str(db_path) + ".lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValueError("This database already has a managed Cairn instance") from exc
+            effective.write_text(yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True))
+            db.configure(db_path)
+            os.environ[REGISTRY_ENV] = str(registry)
+            service = ManagedService(config, effective, directory)
+            from cairn.server.app import app
+            app.state.managed_service = service
+            click.echo(json.dumps({"server": config.server, "database_id": service.database_id,
+                                   "service_id": service.service_id, "pid": os.getpid()}, ensure_ascii=False))
+            try:
+                uvicorn.run(app, host=address.hostname, port=address.port, access_log=False)
+            finally:
+                service.close()
+                stop_agent_groups(registry, {os.getpid()})
+                del app.state.managed_service
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        if original_registry is None:
+            os.environ.pop(REGISTRY_ENV, None)
+        else:
+            os.environ[REGISTRY_ENV] = original_registry
+
+
+@main.command()
+@click.option("--server", required=True, help="已手动启动的本机 Cairn 地址")
+@click.option("--run-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="显式保存本次执行配置快照；否则使用 prepare 保存的 execution.json")
+@click.option("--wait/--no-wait", default=True, show_default=True)
+def submit(server, run_dir, config_path, wait):
+    """向已有 Cairn 提交 AuditPlan；不启动任何服务进程。"""
+    import requests
+    from cairn.controller.submissions import submit_prepared
+
+    try:
+        result = submit_prepared(server, run_dir, config_path=config_path, wait=wait,
+            report=lambda event: click.echo(json.dumps(event, ensure_ascii=False), err=True))
+    except requests.RequestException as exc:
+        raise click.ClickException("Cannot use the existing Cairn service; start/check it manually") from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False))
+    if result["status"] in ("error", "interrupted"):
+        raise click.ClickException(result.get("error") or result["status"])
+
+
+@main.command()
 @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
 @click.option("--port", default=8000, show_default=True, help="Bind port")
 @click.option(
