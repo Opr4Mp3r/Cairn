@@ -1,6 +1,8 @@
 # Builder：原生 Skill 开题与后台审计研究
 
-交互开题使用项目内的 [cairn-builder Skill](../.claude/skills/cairn-builder/SKILL.md)。Claude Code 当前会话负责问答、Kritt 只读取材、源码阅读和 AuditPlan 修订；独立 Controller 负责 preflight、seed review 与研究监督。启动成功后 Skill 交付网页并结束开题，后台进程继续 Explore/Reason、旁路监督、独立结案和归档。
+交互开题使用项目内的 [cairn-builder Skill](../.claude/skills/cairn-builder/SKILL.md)。Claude Code 当前会话负责问答、Kritt 只读取材、源码阅读和 AuditPlan 修订；独立 Controller 负责 preflight、seed review 与研究监督。
+
+**服务职责约定（2026-10-12）：Kritt 和 Cairn 服务由用户在终端手动启动，Builder 只使用服务，可以提交并开始研究任务。** 当前代码的 `cairn start` 会启动后台服务，尚不具备连接已有服务的纯提交入口，因此 Skill 现在先交付方案，不再替用户执行 start。新服务/客户端拆分见[待开发方案](specs/task-recovery-mvp.md)；本页后面的 start 命令是由人手动执行的旧兼容用法。
 
 原 `cairn builder` 保留为已有自动化的批处理兼容入口。研究与结案语义沿用 [v0.5 实现方案](specs/kritt-audit-reconnect-mvp.md)；历史 generic 入口见 [v0.3 记录](specs/kritt-builder-mvp.md)。
 
@@ -42,7 +44,7 @@ export CAIRN_KRITT_READONLY_DSN='host=127.0.0.1 port=5433 dbname=open_kritt user
 
 使用 `/cairn-builder` 时，Claude Code 会先展示当前资源池，主动询问本次沿用还是调整，并按你的自然语言答复直接修改配置。例如：“Explore 用 3 个 Claude Code、2 个 Grok，其余保持当前配置。”没有资源池时，会提出七个角色各一个 Claude Code 的初始方案供选择。已明确的选择不会再次确认，配置后继续开题；也可以只要求配置资源池而不启动研究。
 
-Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并让 `prepare`、`start` 使用同一文件。新运行会把有关问答记入 `requirements.json`。已有任务不热更新，修改用于下一次启动。
+Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及用户手动兼容运行所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；后续纯客户端须随任务提交资源池快照。已有任务不热更新。
 
 资源池用于 `runtime.execution: local`。在顶层 `role_pools` 中为每个角色填写可用 harness 及数量。示例默认所有角色各用一个 `claudecode`；若本机 `claude`、`grok` 均已登录并可调用，可这样配置：
 
@@ -84,9 +86,9 @@ Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同�
 
 Skill 在原会话中处理必要追问，并将问题和答复追加到本 run 的 `requirements.json`。目标应写清效果、部署、攻击者能力和范围；已给出的条件会被保留，未知项仍标为未知。取材只用于开题，适合源码理解、调用链/鉴权梳理、复核既有候选及进一步研究。当前没有统一的应用部署、动态 PoC 或正式漏洞报告生成器。
 
-## prepare / start 接口
+## prepare / 人工 start 兼容接口
 
-Skill 使用以下两个接口，也可在仓库根目录手动执行。
+Skill 可以使用 prepare。当前 start 会拉起后台服务，只能由用户在终端手动执行，不能作为 Builder 连接现有 Cairn 的客户端。下列命令仍可在仓库根目录使用。
 
 先固定输入、核验源码并保存 schema；此步骤不调用模型、不创建研究项目：
 
@@ -103,18 +105,18 @@ uv run --project cairn cairn prepare \
 
 离线材料可显式加 `--view /path/to/view.json`，必须是匹配目标的 Cairn Kritt 适配视图，普通 findings JSON 或 ZIP 不能替代。离线模式不会读取在线 PG；保存的视图只表示本次输入，不等于数据库最新结果。目标、scan、commit、源码或连接不匹配时先解决阻塞，不自动换目标或猜测连接。
 
-保存方案后提交同一个 run：
+保存方案后，如果选择由旧兼容入口启动这次服务与任务，由用户手动执行：
 
 ```sh
 uv run --project cairn cairn start \
   --config dispatch.builder.yaml --run-dir /absolute/path/to/run
 ```
 
-`start` 启动后台监督进程，等到独立预审结果或项目启动后返回 JSON：
+此旧 `start` 启动后台监督进程，等到独立预审结果或项目启动后返回 JSON。它不连接另一套已运行的 Cairn；已有服务时应等待纯提交链路交付，不再启动第二套。用户手动运行后，Skill 可以读取状态文件继续协助：
 
 | 返回情形 | 当前会话的下一步 |
 |---|---|
-| `status=needs_revision` | 读取 `issues`，保留既有取材，在原会话修订 `plan.json`；必要时补充并保存需求，然后对同一 run 重提 `start` |
+| `status=needs_revision` | 读取 `issues`，在原会话修订 `plan.json` 并保留问答；当前由用户手动对同一 run 重提旧 `start` |
 | `status=researching` | 交付 `project_url`、run 目录、`progress` 和 `log` 路径，结束开题 |
 | `status=completed` / `budget_exhausted` / `stopped` | 研究已快速结束、服务已关闭；报告实际终态和 `results` 中的结果文件，不将旧 `project_url` 当作仍可访问的服务 |
 | 执行错误 | 查看错误与日志；执行失败不代表证据被反驳或目标不成立 |
@@ -123,7 +125,7 @@ preflight 与 seed review 使用独立审核会话，开题会话不得自审。
 
 ## 查看进度与停止
 
-打开返回的 `project_url` 查看任务图。后台进程保有本次 Server、Dispatcher 与 Controller 的生命周期；`start` 命令返回和 Skill 会话结束不会停止研究。本机仍需保持运行，研究终止后会回收本次服务。
+以下描述当前人工执行旧 `start` 后的行为。打开返回的 `project_url` 查看任务图；后台进程保有本次 Server、Dispatcher 与 Controller 的生命周期，命令返回后继续研究。本机仍需保持运行，研究终止后会回收本次服务。待服务/客户端拆分完成后，任务结束将不再关闭人工启动的系统服务。
 
 返回的 `progress` 指向 `research.json`，`log` 指向 `launch.log`，`supervisor_pid` 标识本次监督进程。`research.json` 保存研究状态、服务与项目路径；主要状态字段包括：
 
@@ -209,7 +211,7 @@ uv run --project cairn cairn builder \
   --goal '完整且明确的任务目标' --run-dir /absolute/path/to/new-run
 ```
 
-旧命令在前台持有研究生命周期，可在其终端按 Ctrl+C 停止。原生 Skill 的 `start` 在后台持有生命周期，停止研究使用项目网页。
+这些兼容命令由用户手动执行：旧 `builder` 在前台持有研究生命周期，可按 Ctrl+C 停止；旧 `start` 在后台持有生命周期，可通过项目网页停止研究。Builder Skill 不执行这两种会拉起服务的入口。
 
 新配置通过 `role_pools` 选择后台研究与审核的 harness，不会改变原生 Skill 当前会话所使用的模型。旧 `workers` / `controller.roles` 配置仍可使用；纯资源池配置下，旧批处理 Builder 复用 Closing 池的执行者。
 

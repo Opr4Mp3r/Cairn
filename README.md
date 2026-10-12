@@ -196,22 +196,23 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 
 ### Kritt 与本地审计入口
 
-以项目内的 [cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) 作为 Claude Code 的主交互入口。在本仓库打开 Claude Code，调用 `/cairn-builder` 并说明目标：当前会话补充需求、只读查询 Kritt、阅读源码并保存 AuditPlan，独立 Controller 预审通过后启动后台研究。
+以项目内的 [cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) 作为 Claude Code 的主交互入口。在本仓库打开 Claude Code，调用 `/cairn-builder` 并说明目标：当前会话补充需求、配置资源池、只读查询 Kritt、阅读源码并保存 AuditPlan。
 
 ```text
 /cairn-builder 使用 zentao 目标，静态梳理 module/install/control.php 构造函数的进入和终止条件，列出表达式与行号；部署和匿名可达性未知。
 ```
 
-先按 [Builder 使用指南](docs/builder-prepare.md) 配置源码、manifest 和只读连接。Skill 调用 `cairn prepare` 固定输入，再调用 `cairn start` 提交方案；预审要求修订时返回同一会话处理。启动成功后返回项目网页及进度、日志路径，Skill 结束开题，后台监督进程继续管理研究、独立结案和归档。
+先按 [Builder 使用指南](docs/builder-prepare.md) 配置源码、manifest 和只读连接。Kritt/Cairn 服务由用户手动启动，Builder 只使用已有服务。当前 `cairn start` 会拉起后台服务，纯客户端提交接口尚待开发，因此 Skill 先交付方案，旧兼容运行命令由用户手动执行；不会自行再起一套 Cairn。目标使用方式与迁移安排见[恢复及人工服务方案](docs/specs/task-recovery-mvp.md)。
 
 后台角色使用 [角色资源池](docs/builder-prepare.md#角色资源池)：例如 `explore: {claudecode: 3, grok: 2}` 允许同一项目最多五个 Explore 并行。各角色容量直接由 harness 数量相加，模型与 provider 沿用本机 CLI 配置；原生 Builder 留在当前会话。
 
 | 入口或文档 | 当前用途 |
 |---|---|
-| [原生 cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) | 交互开题主入口；问答与方案修订留在当前 Claude Code 会话 |
+| [原生 cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) | 资源配置、取材与方案交付；服务启停由用户手动执行 |
 | [Builder 使用指南](docs/builder-prepare.md) | 准备配置、prepare/start 接口、后台研究、预算和结果复盘 |
 | [Kritt 取材探针](docs/kritt-probe.md) | 只读查询与源码观察，不创建研究项目 |
 | [本地 audit 模式](docs/audit-local.md) | 已有独立审计路径，包含复核、终审及预算 |
+| [任务恢复与运行面板方案](docs/specs/task-recovery-mvp.md) | 待开发：人工服务启动、纯客户端提交、图级恢复与运行面板 |
 
 原 `uv run --project cairn cairn builder ...` 保留为已有自动化的批处理兼容入口。其内部 Builder 会话及前台研究生命周期与原生 Skill 入口不同；新交互任务使用 Skill。
 

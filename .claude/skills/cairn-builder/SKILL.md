@@ -1,11 +1,12 @@
 ---
 name: cairn-builder
-description: 在 Claude Code 原生会话中完成 Cairn 审计开题：主动询问并配置各角色的 harness 资源池、补充需求、只读查询 Kritt、阅读源码、生成 AuditPlan，并交给独立 Controller 预审和后台研究。用于配置研究资源池、用 Cairn/Kritt 开题、根据已有扫描启动研究，或修订尚未创建项目的研究方案。
+description: 在 Claude Code 原生会话中完成 Cairn 审计开题：主动配置角色资源池、补充需求、只读查询 Kritt、阅读源码并生成 AuditPlan。Builder 只使用已启动的系统，Kritt/Cairn 服务必须由用户手动启动。用于配置资源池、根据扫描开题、修订方案和查看任务；纯客户端提交功能未交付前只准备并交付方案。
 ---
 
 # Cairn 原生开题
 
-在当前会话完成资源池配置、问答、取材和方案修订；研究启动后交付网页，结束开题。
+在当前会话完成资源池配置、问答、取材和方案修订。Kritt/Cairn 服务的启动、关闭、重启由用户在终端手动执行；Builder 不执行 Docker 启停、Cairn 服务启动器或后台守护命令，连接失败也不自动拉起另一套服务。
+服务在线后允许 Builder 提交并开始研究任务，这与启动系统服务不同；调用前确认当前版本确实提供纯客户端入口。当前 `cairn start` 会启动后台服务，禁止 Builder 执行它，按第 5 步交付方案。
 直接使用已有 Read、Bash、Write/Edit 工具，不用 ToolSearch 寻找这些内置工具，不创建 MCP 或嵌套 Builder Agent。
 
 ## 1. 主动询问并配置资源池
@@ -17,7 +18,7 @@ description: 在 Claude Code 原生会话中完成 Cairn 审计开题：主动�
 角色容量直接等于数量之和，3 个 Claude Code 加 2 个 Grok 就是 5；不增加 `max_concurrency` 或另一套总量字段。内部 Worker 与容量自动生成，无需另写 `workers`、`controller.roles`、`runtime.max_workers` 或 `runtime.max_project_workers`。
 模型/provider、登录与代理沿用用户的本机 CLI 和环境；不改 CCSwitch 或全局 harness 配置，也不从旧 `common_env` 注入模型。原生 Builder 保持当前会话，不占后台名额。
 保存后用项目的 Python 调用 `DispatchConfig.load` 检查配置能否加载；仅展示资源池及各角色合计，不输出整份配置或凭据。说明 Reason、Preflight、Closing、Final Review 每项目仍串行，名额不代表强制重复执行同一决策。
-后续 `prepare` 与 `start` 必须使用刚保存的同一配置路径。待运行目录创建后，把资源池问题、用户答复与最终选择追加到 `requirements.json.messages`。同次开题的预审修订不重复询问资源池，除非用户要求调整。
+`prepare` 使用刚保存的配置路径，交付时说明该路径与本次资源池。修改本地 YAML 不代表在线服务已经热加载；纯提交功能交付后，须把本次配置快照随任务提交。待运行目录创建后，将资源池问答和最终选择追加到 `requirements.json.messages`；同次方案修订不重复询问，除非用户要求调整。
 用户仅要求配置资源池时，交付配置路径和最终分配后结束，不创建或启动研究。已有运行不热更新；配置调整用于下一次启动。
 
 ## 2. 准备固定输入
@@ -65,20 +66,12 @@ policy 保留 effect、deployment、attacker_capabilities、scope、cvss、evide
 threat_model 每项注明 claim、kind（official/inferred/unknown）、source；官方仓库的代码不自动等于官方威胁模型。
 不将未复核判断写成 policy 的已知前提，不加入“证明不可能”出口，不放宽用户条件；静态任务的 cvss 可为空对象。
 
-## 5. 独立预审与启动
+## 5. 交付方案，使用已在线的服务
 
-```sh
-python3 /absolute/path/to/cairn/.claude/skills/cairn-builder/scripts/cairn.py start \
-  --config dispatch.builder.yaml --run-dir /absolute/path/to/run
-```
+当前版本尚未交付“连接已有 Cairn 并提交 prepared plan”的纯客户端接口；`cairn start`、旧 `cairn builder` 会管理服务进程，不能由 Builder 调用。不要臆造 submit/resume 命令或用底层建图 API 绕过独立 preflight/seed review。
+完成后交付 plan.json、run 目录、配置路径和资源池摘要；如需立即运行，给出指南中的旧兼容命令，由用户在终端手动执行。若用户已经运行另一套 Cairn，说明当前缺少接入它的提交链路，不建议再启动第二套。
+用户手动运行后，可读取本 run 的状态、修订意见、日志或查询已在线的项目。已有项目禁止重复创建；needs_revision 时在原会话修改方案，当前仍由用户手动重提兼容入口。
+后续纯客户端交付并实际可用后，Builder 可提交并开始任务、请求暂停/恢复、查询进度；服务离线只提示人工启动并等待，不能把系统服务启动当成任务恢复。
+运行与审核保持原有独立会话和结案契约；执行错误不是证据反证。报告真实项目状态、可用网页或结果文件，不伪造已提交/已开始，也不把旧网页地址当作仍在线。
 
-提交前读取本 run 的状态；已有 `project.json`/项目 ID 时禁止重复 start，直接报告已有项目和进度路径。
-等待命令返回 JSON；独立 Controller 完成 preflight 与 seed review，当前会话不得自审或伪造批准。
-Seed Review 按小批并行后汇总，Overseer 按不同节点并行；Reason、Preflight、Closing、Final Review 各自保持单项目串行，不因池内有多个名额而重复执行。任务按需启动独立 session，续接保持原 harness 与 session。
-若 `status=needs_revision`，读取 `issues`，在原会话修订 plan.json；需要用户补充时继续问答并保存 requirements.json，再向同一 run 提交 start。
-若出现执行错误，报告错误和日志路径；执行失败不是证据反证，不得据此删除候选或声称目标不成立。
-`status=researching` 时交付返回的 `project_url`、run 目录、`progress` 和 `log` 路径，并说明后台继续研究、独立结案和归档；终止后服务关闭，可查看结果文件。
-若返回 `completed`、`budget_exhausted` 或 `stopped`，研究已快速结束、服务已关闭；交付实际终态与 `results` 中的结果文件，不将旧网页地址当作仍可用的服务。
-到此结束开题，不因本次命令或会话结束而停止后台研究，不再重复 start；后续用户明确要求查看时才读取进度。
-
-配置、预算和产物说明见仓库 `docs/builder-prepare.md`；原 `cairn builder` 仅保留为既有批处理兼容入口。
+当前用法见 `docs/builder-prepare.md`；人工启动系统与纯客户端使用的目标方案见 `docs/specs/task-recovery-mvp.md`。仅要求配置或准备方案时，交付后结束。
