@@ -127,6 +127,22 @@ def submit_prepared(server: str, run_dir: Path, *, config_path: Path | None = No
         health = client.service_health()
         if not health.get("managed") or not health.get("ready"):
             raise ValueError("Cairn execution service is not ready; start it manually with cairn up")
+
+        def check_identity(data):
+            if data["database_id"] != health["database_id"] or data["service_id"] != health["service_id"]:
+                raise ValueError("Cairn database or service instance changed; original run locator was preserved")
+
+        locator = folder / "submission.json"
+        if locator.exists():
+            original = json.loads(locator.read_text())
+            if original.get("database_id") != health["database_id"]:
+                raise ValueError("This run belongs to another Cairn database; use its original database/service")
+            if not original.get("submission_id") or original.get("run_dir") != str(folder):
+                raise ValueError("Saved submission locator does not identify this run")
+            current = client.get_submission(original["submission_id"])
+            check_identity(current)
+            if current["submission_id"] != original["submission_id"] or current["run_dir"] != str(folder):
+                raise ValueError("Original submission is not registered for this run")
         if config_path is not None:
             snapshot = execution_snapshot(DispatchConfig.load(config_path))
         else:
@@ -134,25 +150,30 @@ def submit_prepared(server: str, run_dir: Path, *, config_path: Path | None = No
         prepared = json.loads((folder / "run.json").read_text())
         collect_queries(Path(prepared["query_context"]))
         read_prepared(folder)
-        body = {"run_dir": str(folder), "execution": snapshot.model_dump(mode="json")}
+        body = {"run_dir": str(folder), "execution": snapshot.model_dump(mode="json"),
+                "database_id": health["database_id"], "service_id": health["service_id"]}
         response = client.submit_audit(body)
         if response.status_code == 409:
             current = response.data.get("detail", {}) if response.data else {}
-            if isinstance(current, dict) and current.get("submission_id") and not current.get("project_id"):
+            if (isinstance(current, dict) and current.get("submission_id") and not current.get("project_id")
+                    and current.get("status") in ("needs_revision", "error")):
                 response = client.revise_submission(current["submission_id"], {**body, "revision": current["revision"]})
         if not response.ok:
             raise ValueError(f"submission failed ({response.status_code}): {response.text}")
         result = response.data
-        if result["database_id"] != health["database_id"] or result["service_id"] != health["service_id"]:
-            raise ValueError("service changed during submission; query the submitted run before retrying")
+        check_identity(result)
         write_json(folder / "submission.json", result)
         report(result)
         previous = result["status"]
         while wait and result["status"] in ("pending", "preparing"):
             time.sleep(.2)
             result = client.get_submission(result["submission_id"])
-            if result["database_id"] != health["database_id"]:
-                raise ValueError("submission database changed")
+            check_identity(result)
+            if result["status"] in ("pending", "preparing"):
+                current_health = client.service_health()
+                check_identity(current_health)
+                if not current_health.get("ready"):
+                    raise ValueError(f"Cairn execution components failed; restart it manually: {current_health.get('error')}")
             if result["status"] != previous:
                 report(result)
                 previous = result["status"]

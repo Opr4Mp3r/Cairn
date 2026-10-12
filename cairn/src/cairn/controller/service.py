@@ -57,20 +57,39 @@ class ManagedService:
         self.control_thread.start()
 
     def health(self):
-        dispatcher_ready = self.dispatch_thread.is_alive() and self.dispatcher._settings_checked
+        dispatcher_ready = (self.dispatch_thread.is_alive() and self.dispatcher._settings_checked
+                            and not self.dispatcher._stopping)
         controller_ready = self.control_thread.is_alive()
         return {"managed": True, "service_id": self.service_id, "database_id": self.database_id,
                 "ready": bool(dispatcher_ready and controller_ready and not self._stop.is_set() and not self.error),
                 "dispatcher_ready": dispatcher_ready, "controller_ready": controller_ready, "error": self.error}
 
     def _dispatch(self):
+        self.dispatcher.on_failure = lambda exc: self._fail(f"Dispatcher stopped: {type(exc).__name__}: {exc}")
         try:
             self.dispatcher.run()
         except BaseException as exc:
-            self.error = f"Dispatcher stopped: {type(exc).__name__}: {exc}"
+            self._fail(f"Dispatcher stopped: {type(exc).__name__}: {exc}")
             LOG.exception("managed Dispatcher stopped")
-            for _, token in list(self.jobs.values()):
-                token.cancel("Dispatcher unavailable")
+
+    def _fail(self, error):
+        if self.error is not None:
+            return
+        self.error = error
+        try:
+            with get_conn() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for row in conn.execute("SELECT project_id FROM audit_submissions WHERE status IN ('pending','preparing','running') AND project_id IS NOT NULL"):
+                    self._stop_project(conn, row[0])
+                conn.execute("UPDATE audit_submissions SET status='error',worker_token=NULL,error=?,updated_at=? WHERE status IN ('pending','preparing','running')",
+                             (error, utcnow()))
+        finally:
+            tokens = [token for _, token in list(self.jobs.values())]
+            with ThreadPoolExecutor(max_workers=len(tokens) + 1) as cleanup:
+                futures = [cleanup.submit(self.dispatcher.cancel_running_tasks, error)]
+                futures.extend(cleanup.submit(token.cancel, error) for token in tokens)
+                for future in futures:
+                    future.result()
 
     def _control(self):
         try:
@@ -83,18 +102,18 @@ class ManagedService:
                     row = submissions.claim_next()
                     if row is None:
                         break
-                    if self._stop.is_set():
-                        submissions.finish(row["id"], "interrupted", error="Cairn service shutdown")
+                    if self._stop.is_set() or self.error:
+                        submissions.finish(row["id"], "interrupted", error=self.error or "Cairn service shutdown")
                         break
                     token = TaskCancellation()
                     self.jobs[row["id"]] = (self.executor.submit(self._run_submission, row, token), token)
         except BaseException as exc:
-            self.error = f"Controller stopped: {type(exc).__name__}: {exc}"
+            self._fail(f"Controller stopped: {type(exc).__name__}: {exc}")
             LOG.exception("managed Controller stopped")
 
     def _run_submission(self, row, token):
-        if self._stop.is_set():
-            token.cancel("Cairn service shutdown")
+        if self._stop.is_set() or self.error:
+            token.cancel(self.error or "Cairn service shutdown")
         config = DispatchConfig.model_validate_json(row["execution_json"])
         prepared = json.loads(row["prepared_json"])
         backend = LocalBackend(config.local)

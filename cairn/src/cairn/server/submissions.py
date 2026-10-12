@@ -21,6 +21,8 @@ class SubmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_dir: str = Field(min_length=1)
+    database_id: str = Field(min_length=1)
+    service_id: str = Field(min_length=1)
     execution: ExecutionSnapshot
 
 
@@ -45,6 +47,8 @@ def summary(row, service):
 
 
 def accept(service, body: SubmissionRequest, *, submission_id=None):
+    if body.database_id != service.database_id or body.service_id != service.service_id:
+        raise HTTPException(409, "Cairn database or service instance changed; no submission was accepted")
     if not service.health()["ready"]:
         raise HTTPException(503, "Execution components are not ready; start Cairn manually")
     try:
@@ -58,6 +62,8 @@ def accept(service, body: SubmissionRequest, *, submission_id=None):
         raise HTTPException(422, str(exc)) from exc
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if not service.health()["ready"]:
+            raise HTTPException(503, "Execution components failed; restart Cairn manually")
         existing = conn.execute("SELECT * FROM audit_submissions WHERE run_dir=?", (str(folder),)).fetchone()
         if submission_id is not None:
             row = get_row(conn, submission_id)
@@ -106,7 +112,7 @@ def claim_next():
 
 def finish(submission_id, status, *, issues=(), error=None):
     with get_conn() as conn:
-        conn.execute("UPDATE audit_submissions SET status=?,issues_json=?,error=?,updated_at=? WHERE id=?",
+        conn.execute("UPDATE audit_submissions SET status=?,issues_json=?,error=?,updated_at=? WHERE id=? AND status NOT IN ('deleted','error','interrupted')",
                      (status, json.dumps(list(issues)), error, utcnow(), submission_id))
 
 

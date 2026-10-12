@@ -25,6 +25,7 @@ def main():
 def up(config_path: Path, db_path: Path):
     """人工启动本机 Cairn 执行服务；任务提交不负责服务启停。"""
     import fcntl
+    import socket
     from urllib.parse import urlparse
     import yaml
 
@@ -45,34 +46,39 @@ def up(config_path: Path, db_path: Path):
             raise ValueError("cairn up requires local execution")
         address = urlparse(config.server)
         db_path = db_path.expanduser().resolve()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        directory = db_path.parent / (db_path.stem + "-service")
-        directory.mkdir(exist_ok=True)
-        root = Path(config.local.workspace_root).expanduser() if config.local.workspace_root else directory / "work"
-        if not root.is_absolute():
-            root = config_path.resolve().parent / root
-        config.local.workspace_root = str(root.resolve())
-        effective = directory / "config.yaml"
-        registry = directory / "agent-processes"
-        with Path(str(db_path) + ".lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise ValueError("This database already has a managed Cairn instance") from exc
-            effective.write_text(yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True))
-            db.configure(db_path)
-            os.environ[REGISTRY_ENV] = str(registry)
-            service = ManagedService(config, effective, directory)
-            from cairn.server.app import app
-            app.state.managed_service = service
-            click.echo(json.dumps({"server": config.server, "database_id": service.database_id,
-                                   "service_id": service.service_id, "pid": os.getpid()}, ensure_ascii=False))
-            try:
-                uvicorn.run(app, host=address.hostname, port=address.port, access_log=False)
-            finally:
-                service.close()
-                stop_agent_groups(registry, {os.getpid()})
-                del app.state.managed_service
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((address.hostname, address.port))
+            listener.listen()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            directory = db_path.parent / (db_path.stem + "-service")
+            directory.mkdir(exist_ok=True)
+            root = Path(config.local.workspace_root).expanduser() if config.local.workspace_root else directory / "work"
+            if not root.is_absolute():
+                root = config_path.resolve().parent / root
+            config.local.workspace_root = str(root.resolve())
+            effective = directory / "config.yaml"
+            registry = directory / "agent-processes"
+            with Path(str(db_path) + ".lock").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise ValueError("This database already has a managed Cairn instance") from exc
+                effective.write_text(yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True))
+                db.configure(db_path)
+                os.environ[REGISTRY_ENV] = str(registry)
+                service = ManagedService(config, effective, directory)
+                from cairn.server.app import app
+                app.state.managed_service = service
+                click.echo(json.dumps({"server": config.server, "database_id": service.database_id,
+                                       "service_id": service.service_id, "pid": os.getpid()}, ensure_ascii=False))
+                try:
+                    uvicorn.Server(uvicorn.Config(app, host=address.hostname, port=address.port,
+                                                  access_log=False)).run(sockets=[listener])
+                finally:
+                    service.close()
+                    stop_agent_groups(registry, {os.getpid()})
+                    del app.state.managed_service
     except (OSError, ValueError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
@@ -101,7 +107,7 @@ def submit(server, run_dir, config_path, wait):
     except (OSError, ValueError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(result, ensure_ascii=False))
-    if result["status"] in ("error", "interrupted"):
+    if result["status"] in ("error", "interrupted", "deleted"):
         raise click.ClickException(result.get("error") or result["status"])
 
 

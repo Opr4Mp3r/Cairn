@@ -132,7 +132,8 @@ def test_submission_revision_and_project_creation_are_bound_and_idempotent(probe
     service = Service()
     service.config = config
     app.state.managed_service = service
-    body = {"run_dir": prepared["run_dir"], "execution": execution_snapshot(config).model_dump(mode="json")}
+    body = {"run_dir": prepared["run_dir"], "execution": execution_snapshot(config).model_dump(mode="json"),
+            "database_id": service.database_id, "service_id": service.service_id}
     try:
         with TestClient(app) as client:
             first = client.post("/audit-submissions", json=body)
@@ -172,6 +173,20 @@ def test_submission_revision_and_project_creation_are_bound_and_idempotent(probe
             assert again.json()["project"]["id"] == project_id
             assert len(client.get("/projects").json()) == 1
             assert client.get(f"/audit-submissions/{submission_id}").json()["project_id"] == project_id
+            assert client.delete(f"/projects/{project_id}").status_code == 204
+            assert client.get(f"/projects/{project_id}").status_code == 404
+            deleted = client.get(f"/audit-submissions/{submission_id}").json()
+            assert deleted["status"] == "deleted" and deleted["project_id"] is None
+            assert project_id in deleted["error"]
+            submissions.finish(submission_id, "error", error="late controller result")
+            repeated = client.post("/audit-submissions", json=body)
+            assert repeated.status_code == 202 and repeated.json()["status"] == "deleted"
+            assert repeated.json()["submission_id"] == submission_id
+            plan["goal"] += " changed after deletion"
+            Path(prepared["plan"]).write_text(json.dumps(plan))
+            assert client.post("/audit-submissions", json=body).status_code == 409
+            assert client.put(f"/audit-submissions/{submission_id}", json={**body, "revision": 2}).status_code == 409
+            assert client.get("/projects").json() == [] and submissions.claim_next() is None
     finally:
         del app.state.managed_service
 
@@ -202,6 +217,7 @@ def test_manual_up_and_client_submission_keep_service_alive_with_project_pool(pr
                 try: return client.service_health() if client.service_health()["ready"] else None
                 except requests.RequestException: return None
             health = wait_until(ready_service)
+            identity = {key: health[key] for key in ("database_id", "service_id")}
             initial = client.list_projects()
             assert initial == [] and process.poll() is None
             task_config = config.model_dump(mode="json")
@@ -211,7 +227,7 @@ def test_manual_up_and_client_submission_keep_service_alive_with_project_pool(pr
             original_goal = plan["goal"]
             plan["goal"] = "revise-me"
             Path(prepared["plan"]).write_text(json.dumps(plan))
-            response = client.submit_audit({"run_dir": prepared["run_dir"], "execution": snapshot})
+            response = client.submit_audit({"run_dir": prepared["run_dir"], "execution": snapshot, **identity})
             assert response.ok, response.text
             sid = response.data["submission_id"]
             returned = wait_until(lambda: (r if (r := client.get_submission(sid))["status"] == "needs_revision" else None))
@@ -219,7 +235,7 @@ def test_manual_up_and_client_submission_keep_service_alive_with_project_pool(pr
             assert client.list_projects() == [] and client.service_health()["ready"]
             plan["goal"] = original_goal
             Path(prepared["plan"]).write_text(json.dumps(plan))
-            revised = client.revise_submission(sid, {"run_dir": prepared["run_dir"], "execution": snapshot, "revision": 1})
+            revised = client.revise_submission(sid, {"run_dir": prepared["run_dir"], "execution": snapshot, "revision": 1, **identity})
             assert revised.ok and revised.data["revision"] == 2 and revised.data["submission_id"] == sid
             receipts_path = Path(prepared["run_dir"]) / "query-receipts.json"
             saved_receipts = receipts_path.read_bytes()

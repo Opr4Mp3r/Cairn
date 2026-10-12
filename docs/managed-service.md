@@ -28,6 +28,8 @@ curl -s http://127.0.0.1:8000/runtime/health
 
 `managed=true` 且 `ready=true` 才能接纳任务。仅运行 `cairn serve` 是数据查看实例，不能消费提交。端口冲突或执行组件失效时，应由用户处理并重启；客户端不会启动备用服务或换端口。
 
+服务先成功绑定并持有监听 socket，再更新旧运行状态。Dispatcher 或 Controller 故障时先撤销就绪、标记未结束的提交为 error，并取消在途调用，随后等待清理；等待提交的客户端会读取该错误或就绪失败，明确退出。
+
 ## 2. 准备和提交一个任务
 
 源码、manifest、Kritt 只读连接、`prepare`、取材和 AuditPlan 格式沿用 [Builder 指南](builder-prepare.md)。`prepare` 在角色池模式下额外保存 `execution.json`，包含本次角色池、任务超时、审计提示组、审核及预算配置。
@@ -44,6 +46,8 @@ uv run --project cairn cairn submit \
 
 提交返回稳定的 `submission_id`、revision、状态、服务和数据库身份。有项目时返回 `project_id` 与 `project_url`。同一 run、相同快照重试返回同一个提交；不能通过重复提交创建第二个项目。
 
+run 已有 `submission.json` 时，客户端先核对原数据库身份与提交关联，换库后重提会在 POST 前拒绝并保留原定位。每次接纳/修订请求须携带就绪接口返回的 `database_id` 和 `service_id`，服务端在保存输入前再次校验，拒绝检查与提交之间的实例切换。同一数据库人工重启后可以查询原提交，但查询与重提不等于恢复研究。
+
 | 状态 | 下一步 |
 |---|---|
 | `pending` / `preparing` | 服务排队或执行独立 preflight、种子复核 |
@@ -51,6 +55,7 @@ uv run --project cairn cairn submit \
 | `running` | 打开 project_url；Dispatcher 与旁路 Controller 按本次快照工作 |
 | `completed` / `budget_exhausted` / `stopped` | 查看图及结果；系统服务继续在线 |
 | `error` / `interrupted` | 查看 error 和服务日志；执行失败不代表证据被反驳 |
+| `deleted` | 原项目已删除，保留提交身份和快照；同 run 不重新建图，新任务使用新的 run |
 
 preflight 与 seed review 复用已有独立会话，审核通过后才创建和激活图；研究继续复用 Overseer、Closing 与独立终审。管理服务内的审计创建/激活必须经过服务内部提交关联，客户端不能直接绕过这条准备链路。
 

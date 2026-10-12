@@ -70,6 +70,7 @@ class DispatcherLoop:
         self._startup_healthchecks_checked = False
         self._task_cancellations: set[TaskCancellation] = set()
         self._stopping = False
+        self.on_failure = None
 
     def _new_cancellation(self) -> TaskCancellation:
         cancellation = TaskCancellation()
@@ -133,6 +134,16 @@ class DispatcherLoop:
                 if once:
                     break
                 time.sleep(self.config.runtime.interval)
+        except BaseException as exc:
+            self._settings_checked = False
+            self._stopping = True
+            try:
+                callback = getattr(self, "on_failure", None)
+                if callback is not None:
+                    callback(exc)
+            finally:
+                self.cancel_running_tasks("Dispatcher failed")
+            raise
         finally:
             self.close()
 

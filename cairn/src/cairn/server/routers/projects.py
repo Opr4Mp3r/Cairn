@@ -146,7 +146,10 @@ def get_project(project_id: str):
 @router.delete("/projects/{project_id}", status_code=204)
 def delete_project(project_id: str):
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         get_project_or_404(conn, project_id)
+        conn.execute("UPDATE audit_submissions SET status='deleted',project_id=NULL,worker_token=NULL,error=?,updated_at=? WHERE project_id=?",
+                     (f"Project {project_id} was deleted; use a new run for a new task", utcnow(), project_id))
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
 
