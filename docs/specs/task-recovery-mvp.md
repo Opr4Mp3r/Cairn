@@ -4,7 +4,7 @@
 
 本文描述完整开发目标；已交付范围以本节开发状态和检查点材料为准。已确认的产品决定：**停机暂停预算，恢复后继续使用剩余额度；Kritt/Cairn 服务由用户手动启动，Builder 只使用已在线服务，可提交并开始研究任务**。
 
-开发状态（2026-10-13）：REC-CP1 已验收并提交（`ba0833f`）。REC-CP2 首验确认的四项 P2 已修复并完成回归，等待独立复验，入口见[在线服务指南](../managed-service.md)。REC-CP3～REC-CP4 尚未开发；本次不交付新版运行面板或 Skill 恢复路由。
+开发状态（2026-10-13）：REC-CP1 已验收并提交（`ba0833f`），REC-CP2 已复验通过并提交（`8182f91`）。REC-CP3 在 `codex/task-recovery-cp3` 实现在线控制与运行面板，已通过独立验收；使用方式见[在线服务指南](../managed-service.md)。REC-CP4 的 Skill 提交/恢复路由尚未开发。
 
 ## 1. 交付目标与范围
 
@@ -43,7 +43,7 @@
 
 ### 3.1 用户手动启动系统服务
 
-下列 Cairn 命令是拟开发接口，当前 `8306eac` 尚未实现：
+下列人工服务入口已在 REC-CP1 实现：
 
 ```sh
 # 由用户在终端执行；Kritt 的启动命令继续使用其自身项目约定。
@@ -61,7 +61,7 @@ uv run --project cairn cairn up \
 
 ### 3.2 Builder 使用在线服务
 
-拟开发纯客户端接口：
+REC-CP1/CP2 已提供纯客户端接口：
 
 ```sh
 cairn submit --server http://127.0.0.1:8000 --run-dir /path/to/prepared-run
@@ -283,7 +283,7 @@ Reason 旧输出可能已经逐项写入了一部分 Intent，一期不自动重
 
 ## 9. 最小接口与前后端协作
 
-以下为拟新增接口，最终命名遵循现有路由惯例，所有接口都只使用已在线服务：
+当前接口遵循现有路由惯例，所有控制请求都只使用已在线服务：
 
 | 接口 | 语义 |
 |---|---|
@@ -294,7 +294,7 @@ Reason 旧输出可能已经逐项写入了一部分 Intent，一期不自动重
 | `GET /projects/:id/runtime` | 实际任务状态、阶段、预算、池占用、错误与可用动作 |
 | `POST /projects/:id/runtime/pause` | 幂等请求暂停任务，返回 pausing/paused |
 | `POST /projects/:id/runtime/resume` | 在线服务恢复原任务，返回 resuming/running 或具体阻塞 |
-| `POST /projects/:id/runtime/heartbeat` | 服务内部心跳与执行状态，拒绝旧 owner/世代续租 |
+| `runtime.heartbeat`（内部调用） | 服务内运行管理续租；不开放网页或 Agent 的心跳写入口 |
 | `GET /projects/:id/runtime/logs` | 查看本项目允许的日志尾部，不接受任意文件路径 |
 
 提交和控制意图持久化后，由 Cairn 的内部调度消费。HTTP 请求不等待长模型调用；重复请求使用同一提交/操作身份，不重复建图或启动执行。复用已有材料、审核回执和项目数据，不建设额外通用工作流平台。

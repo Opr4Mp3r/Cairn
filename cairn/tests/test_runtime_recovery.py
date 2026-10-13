@@ -311,6 +311,7 @@ def test_real_service_pause_crash_and_double_resume_continue_original_graph(prob
             time.sleep(.1)
             assert client.get_runtime(pid)["elapsed_seconds"] == frozen["elapsed_seconds"]
             identity = {k: first_health[k] for k in ("database_id", "service_id")}
+            reason_count_before_resume = len(reasons.read_text().splitlines()) if reasons.exists() else 0
             def resume():
                 with closing(CairnClient(config.server, trust_env=False)) as caller:
                     return caller.control_runtime(pid, "resume", identity)
@@ -322,8 +323,14 @@ def test_real_service_pause_crash_and_double_resume_continue_original_graph(prob
             wait_until(lambda: len(calls()) >= 3)
             assert calls()[1]["session"] != calls()[2]["session"]
             assert len(client.list_projects()) == 1
-            assert client.get_project(pid).project.reason is None
-            assert reasons.exists() and len(reasons.read_text().splitlines()) >= 1
+            def resumed_reason_finished():
+                if not reasons.exists() or len(reasons.read_text().splitlines()) <= reason_count_before_resume:
+                    return None
+                project = client.get_project(pid)
+                return project if project.project.reason is None else None
+            settled = wait_until(resumed_reason_finished)
+            assert settled.project.reason is None
+            assert len(reasons.read_text().splitlines()) > reason_count_before_resume
             assert client.get_submission(sid)["project_id"] == pid
             workspace = Path(config.local.workspace_root) / pid
             original_materials = (workspace / "kritt-materials.json").read_bytes()
@@ -383,6 +390,8 @@ def test_legacy_native_run_is_adopted_without_creating_a_new_project(probe, tmp_
     from cairn.server.app import app
     from cairn.controller.service import ManagedService
     from test_audit_api import prepare
+    from cairn.controller import submissions as controls
+    from cairn.dispatcher.protocol.client import ApiResult
     config, prepared, plan = configured(probe)
     folder = Path(prepared["run_dir"])
     monkeypatch.setattr(db, "_db_path", None)
@@ -418,11 +427,19 @@ def test_legacy_native_run_is_adopted_without_creating_a_new_project(probe, tmp_
             invalid = http.post(f"/projects/{pid}/runtime/resume", json={**identity, "remaining_seconds": 61})
             assert invalid.status_code == 422
             assert http.get(f"/projects/{pid}/runtime").json()["clock_mode"] == "legacy"
-            migrated = http.post(f"/projects/{pid}/runtime/resume", json={**identity, "remaining_seconds": 40})
-            assert migrated.status_code == 202, migrated.text
-            assert migrated.json()["stage_remaining_seconds"] == 40
+            class Client:
+                def __init__(self, *_args, **_kwargs): pass
+                def close(self): pass
+                def service_health(self): return {"managed": True, "ready": True, **identity}
+                def get_runtime(self, project_id): return http.get(f"/projects/{project_id}/runtime").json()
+                def control_runtime(self, project_id, action, body):
+                    response = http.post(f"/projects/{project_id}/runtime/{action}", json=body)
+                    return ApiResult(response.status_code, response.json())
+            monkeypatch.setattr(controls, "CairnClient", Client)
+            migrated = controls.control_prepared("http://127.0.0.1:8000", "resume", run_dir=folder, remaining_seconds=40)
+            assert migrated["project_id"] == pid and migrated["stage_remaining_seconds"] == 40
             assert len(http.get("/projects").json()) == 1
-            assert http.post(f"/projects/{pid}/runtime/resume", json=identity).json()["generation"] == migrated.json()["generation"]
+            assert http.post(f"/projects/{pid}/runtime/resume", json=identity).json()["generation"] == migrated["generation"]
             assert http.post(f"/projects/{pid}/runtime/resume", json={**identity, "remaining_seconds": 40}).status_code == 409
             with db.get_conn() as conn:
                 row = conn.execute("SELECT * FROM audit_submissions").fetchone()
@@ -470,6 +487,8 @@ def test_preparing_recovery_restores_workspace_and_existing_preflight_receipts(p
     class Service:
         service_id = "preparation-fixture"
         database_id = "preparation-database"
+        directory = tmp_path / "service"
+        def health(self): return {"ready": False}
         def start(self): pass
         def close(self): pass
     app.state.managed_service = Service()

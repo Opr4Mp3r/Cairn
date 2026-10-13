@@ -16,6 +16,18 @@
 <script defer src="/static/vendor/alpine.min.js"></script>
 <style>
   [x-cloak] { display: none !important; }
+
+  .cairn-offline [data-write] { pointer-events: none; opacity: .4; }
+  .cairn-offline .reason-graph-scan { display: none; }
+  .cairn-offline .reason-beacon::after { animation: none !important; }
+  .cairn-offline [class*="running"], .cairn-offline [class*="running"]::before,
+  .cairn-offline [class*="running"]::after { animation: none !important; }
+  @media (max-width: 767px) {
+    #graphLayout .runtime-aside { display: none; position: absolute; inset: 0 0 0 auto; width: min(90vw, 400px) !important; min-width: 0 !important; box-shadow: -10px 0 30px #0f172a22; }
+    #graphLayout .runtime-aside.mobile-panel-open { display: flex; }
+    .graph-header { flex-wrap: wrap; }
+  }
+
   #cy { width: 100%; height: 100%; }
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -226,7 +238,18 @@
   }
 </script>
 </head>
-<body class="bg-slate-50 text-slate-800 h-screen flex flex-col overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel }" x-data="cairnApp()">
+<body class="bg-slate-50 text-slate-800 h-screen flex flex-col overflow-hidden" :class="{ 'select-none cursor-col-resize': isResizingPanel, 'cairn-offline': connectionState !== 'online' }" x-data="cairnApp()">
+
+<div x-show="connectionState !== 'online'" x-cloak role="status" data-testid="connection-banner"
+  class="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 flex flex-wrap items-center gap-2">
+  <strong x-text="connectionState === 'changed' ? '数据库身份已变化，保留原任务快照。' : connectionState === 'connecting' ? '正在连接 Cairn…' : 'Cairn 服务离线，当前数据不会继续更新。'"></strong>
+  <span x-text="`数据截至：${lastSnapshotAt ? formatTime(lastSnapshotAt) : '尚未读取'}`"></span>
+  <span class="font-mono" x-text="location.origin"></span>
+  <span x-show="connectionError" x-text="connectionError"></span>
+  <button @click="retryConnection()" :disabled="pollBusy" class="border border-amber-300 rounded-lg px-2 py-1 disabled:opacity-40">重试连接</button>
+  <button @click="copyManualStart()" class="border border-amber-300 rounded-lg px-2 py-1">复制人工启动说明</button>
+  <code class="basis-full break-all text-[11px]" x-text="serviceHealth?.manual_start || '在终端使用原配置和数据库执行 cairn up，再回到此页面重试连接。'"></code>
+</div>
 
 <!-- ═══════════ PROJECT LIST VIEW ═══════════ -->
 <div x-show="view === 'list'" x-cloak class="flex-1 flex flex-col overflow-hidden">
@@ -261,7 +284,7 @@
         class="h-7 px-2.5 rounded-lg border border-amber-200 text-xs text-amber-700 hover:bg-amber-50 transition inline-flex items-center gap-1.5 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
         title="Stop all active projects">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
-        <span x-text="isStoppingAllProjects ? 'Stopping...' : 'Stop Active'"></span>
+        <span x-text="isStoppingAllProjects ? '提交中…' : '暂停／停止活动任务'"></span>
       </button>
     </div>
     <div class="flex items-center gap-1.5">
@@ -296,17 +319,17 @@
           <div class="flex items-start justify-between mb-3">
             <span class="text-[11px] font-mono text-slate-400 tracking-wide" x-text="p.id"></span>
             <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em]"
-              :class="projectStatusBadgeClass(p.status)"
-              x-text="p.status"></span>
+              :class="runtimeFor(p.id)?.managed ? runtimeStateClass(runtimeFor(p.id)) : projectStatusBadgeClass(p.status)"
+              x-text="runtimeFor(p.id)?.managed ? runtimeStateLabel(runtimeFor(p.id)) : p.status"></span>
           </div>
           <div class="mb-3 flex-1">
             <div class="title-action-trigger flex items-start gap-2">
               <h3 class="min-w-0 flex-1 text-[15px] font-semibold text-slate-700 break-words [overflow-wrap:anywhere] group-hover:text-brand-600 transition-colors" x-text="p.title"></h3>
               <button type="button"
-                @click.stop="openRenameProject(p.id, p.title)"
+                @click.stop="openRenameProject(p.id, p.title)" data-write
                 class="title-action-button mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400"
                 title="Rename project"
-                :aria-label="`Rename ${p.title}`">
+                :aria-label="`Rename ${p.title}`" :disabled="connectionState !== 'online'">
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m16.862 4.487 1.65-1.65a1.875 1.875 0 1 1 2.652 2.652l-9.193 9.193a4.5 4.5 0 0 1-1.897 1.13L6 17l1.188-4.074a4.5 4.5 0 0 1 1.13-1.897l8.544-8.542Z"/><path d="M19.5 7.125 16.875 4.5"/><path d="M5.25 18.75h13.5"/></svg>
               </button>
             </div>
@@ -365,13 +388,14 @@
               </button>
               <template x-if="canToggleProject(p)">
                 <button type="button" @click.stop="toggleProjectStopById(p.id, p.status)"
+                  :disabled="runtimeFor(p.id)?.managed ? !canRuntimeAction(p.id, ['running', 'preparing'].includes(runtimeFor(p.id).state) ? 'pause' : 'resume') : connectionState !== 'online'"
                   class="px-2 py-1 rounded-lg border text-[11px] transition flex items-center gap-1"
                   :class="p.status !== 'stopped'
                     ? 'border-amber-200 text-amber-600 hover:bg-amber-50'
                     : 'border-teal-200 text-teal-600 hover:bg-teal-50'">
                   <svg x-show="p.status !== 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
                   <svg x-show="p.status === 'stopped'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>
-                  <span x-text="p.status === 'stopped' ? 'Resume' : 'Stop'"></span>
+                  <span x-text="runtimeFor(p.id)?.managed ? runtimeActionLabel(p.id) : p.status === 'stopped' ? 'Resume' : 'Stop'"></span>
                 </button>
               </template>
               <template x-if="canReopenProject(p)">
@@ -394,25 +418,29 @@
   </div>
 </div>
 
+<div x-show="view === 'list' && batchResults.length" class="shrink-0 max-h-32 overflow-y-auto border-t bg-white px-4 py-2 text-xs" role="status">
+  <template x-for="result in batchResults" :key="result.id"><p :class="result.error ? 'text-rose-700' : 'text-slate-600'" x-text="`${result.id} · ${result.title}：${result.status}${result.error ? ' — ' + result.error : ''}`"></p></template>
+</div>
+
 <!-- ═══════════ GRAPH VIEW ═══════════ -->
 <template x-if="view === 'graph'">
 <div class="flex-1 flex flex-col overflow-hidden">
-  <header class="bg-white/80 backdrop-blur border-b border-slate-200/60 px-4 py-2.5 flex items-center gap-3 shrink-0 z-20">
+  <header class="graph-header bg-white/80 backdrop-blur border-b border-slate-200/60 px-4 py-2.5 flex items-center gap-3 shrink-0 z-20">
     <button @click="backToList()" class="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400 hover:text-slate-600">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
     </button>
     <div class="title-action-trigger flex items-center gap-2 min-w-0">
       <span class="text-[11px] font-mono text-slate-400" x-text="project.project.id"></span>
       <h2 class="text-[15px] font-semibold text-slate-700 truncate" x-text="project.project.title"></h2>
-      <button x-show="!replay.active" @click="openRenameProject(project.project.id, project.project.title)"
+      <button data-write x-show="!replay.active" @click="openRenameProject(project.project.id, project.project.title)"
         class="title-action-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-100 focus:border-brand-400"
         title="Rename project"
-        :aria-label="`Rename ${project.project.title}`">
+        :aria-label="`Rename ${project.project.title}`" :disabled="connectionState !== 'online'">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="m16.862 4.487 1.65-1.65a1.875 1.875 0 1 1 2.652 2.652l-9.193 9.193a4.5 4.5 0 0 1-1.897 1.13L6 17l1.188-4.074a4.5 4.5 0 0 1 1.13-1.897l8.544-8.542Z"/><path d="M19.5 7.125 16.875 4.5"/><path d="M5.25 18.75h13.5"/></svg>
       </button>
       <span class="px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-[0.12em] shrink-0"
-        :class="projectStatusBadgeClass(project.project.status)"
-        x-text="project.project.status"></span>
+        :class="runtimeFor()?.managed ? runtimeStateClass() : projectStatusBadgeClass(project.project.status)"
+        x-text="runtimeFor()?.managed ? runtimeStateLabel() : project.project.status"></span>
     </div>
     <div class="flex-1"></div>
     <div class="flex items-center gap-4 text-xs text-slate-400">
@@ -446,11 +474,7 @@
           </button>
         </div>
       </template>
-      <button @click="viewProjectYaml(selectedProjectId, project.project.title)" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition flex items-center gap-1.5">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M8.25 12h7.5M8.25 15h5.25"/></svg>
-        Snapshot
-      </button>
-      <template x-if="!replay.active && canToggleProject(project.project)">
+      <template x-if="!replay.active && !runtimeFor()?.managed && canToggleProject(project.project)">
         <button @click="toggleProjectStop()"
           class="px-2.5 py-1 rounded-lg border text-xs transition flex items-center gap-1.5"
           :class="project.project.status !== 'stopped'
@@ -468,10 +492,20 @@
           Reopen
         </button>
       </template>
-      <button x-show="!replay.active" @click="deleteProject()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition flex items-center gap-1.5">
+      <details class="relative text-xs">
+        <summary class="cursor-pointer px-2.5 py-1 border border-slate-200 rounded-lg">更多</summary>
+        <div class="absolute right-0 top-full mt-2 z-40 rounded-xl border border-slate-200 bg-white p-2 shadow-lg space-y-2 min-w-32">
+      <button @click="viewProjectYaml(selectedProjectId, project.project.title)" class="px-2.5 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><path d="M14.25 3H7.5A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h9a2.25 2.25 0 0 0 2.25-2.25V8.25L14.25 3Z"/><path d="M14.25 3v5.25h4.5"/><path d="M8.25 12h7.5M8.25 15h5.25"/></svg>
+        Snapshot
+      </button>
+      <button data-write x-show="!replay.active" @click="deleteProject()" class="px-2.5 py-1 rounded-lg border border-rose-200 text-xs text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition flex items-center gap-1.5" :disabled="connectionState !== 'online'">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4.75A1.75 1.75 0 0 1 9.75 3h4.5A1.75 1.75 0 0 1 16 4.75V6"/><path d="M19 6l-.63 11.338A2 2 0 0 1 16.37 19.5H7.63a2 2 0 0 1-1.997-2.162L5 6"/><path d="M10 10.5v5"/><path d="M14 10.5v5"/></svg>
         Delete
       </button>
+        </div>
+      </details>
+      <button @click="mobilePanelOpen = !mobilePanelOpen" class="md:hidden px-2 py-1 border rounded-lg text-xs">详情</button>
     </div>
     <div class="flex items-center gap-1.5 ml-1">
       <button @click="showLocalPrefs = true" class="h-7 max-w-40 px-2.5 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition inline-flex items-center shrink-0">
@@ -483,7 +517,43 @@
     </div>
   </header>
 
-  <div class="flex-1 flex overflow-hidden" id="graphLayout">
+  <p x-show="isOpeningProject || !graphSnapshotReady" role="status" class="shrink-0 bg-slate-50 px-4 py-2 text-xs text-slate-500" x-text="isOpeningProject ? '正在读取所选项目，暂时保留上一张图。' : '当前为上次快照，读取新状态后才能操作任务。'"></p>
+  <section x-show="!replay.active && project.project.mode === 'audit'" class="shrink-0 border-b border-slate-200 bg-white px-4 py-3 space-y-2" data-testid="runtime-summary">
+    <div class="flex flex-wrap items-center gap-2 text-xs">
+      <span class="rounded-full px-2 py-1 font-semibold" :class="runtimeStateClass()" x-text="runtimeStateLabel()"></span>
+      <ol class="flex flex-wrap items-center gap-2 text-slate-400">
+        <template x-for="phase in ['preparing', 'researching', 'draining', 'finalizing']" :key="phase">
+          <li :class="runtimeFor()?.audit_phase === phase ? 'font-semibold text-slate-800' : ''" x-text="runtimePhaseLabel(phase)"></li>
+        </template>
+      </ol>
+      <span class="flex-1"></span>
+      <button x-show="runtimeFor()?.managed && !['completed', 'budget_exhausted'].includes(project.project.status)" @click="toggleProjectStop()"
+        :disabled="!canRuntimeAction(selectedProjectId, ['running', 'preparing'].includes(runtimeFor()?.state) ? 'pause' : 'resume')"
+        class="rounded-lg bg-teal-700 px-3 py-1.5 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed" data-testid="runtime-action"
+        x-text="runtimeActionLabel()"></button>
+      <button x-show="['completed', 'budget_exhausted'].includes(project.project.status)" @click="viewProjectYaml(selectedProjectId, project.project.title)" class="rounded-lg border px-3 py-1.5">导出结果</button>
+      <button @click="openRuntimePanel()" class="rounded-lg border px-3 py-1.5">运行详情与日志</button>
+    </div>
+    <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-500">
+      <span>当前阶段剩余 <strong class="text-slate-800 font-mono" x-text="runtimeFor()?.audit_phase === 'preparing' ? '不计时' : formatSeconds(runtimeFor()?.stage_remaining_seconds)"></strong></span>
+      <span>总余额 <strong class="font-mono" x-text="formatSeconds(runtimeFor()?.total_remaining_seconds)"></strong></span>
+      <template x-for="row in rolePoolRows().filter(row => ['explore', 'reason', 'overseer', 'final_review'].includes(row.role))" :key="row.role">
+        <span x-text="`${row.label} ${row.used == null ? '未知' : row.used}/${row.capacity}`"></span>
+      </template>
+      <span x-text="`待执行方向 ${project.intents.filter(i => !i.to).length}`"></span>
+      <span x-text="`待复核节点 ${project.facts.filter(f => f.audit?.review_status === 'unverified').length}`"></span>
+      <span class="ml-auto" x-text="`数据更新于 ${formatTime(runtimeFor()?.updated_at)}`"></span>
+    </div>
+    <div class="flex items-center gap-2 text-[10px] text-slate-400">
+      <span>时间预算消耗</span><div class="h-1 rounded-full bg-slate-100 flex-1 max-w-64"><div class="h-1 rounded-full bg-teal-500" :style="{ width: timeBudgetPercent() + '%' }"></div></div>
+      <span x-text="`${timeBudgetPercent().toFixed(0)}%`"></span>
+    </div>
+    <p class="text-[11px] text-slate-400">暂停会取消未完成调用；恢复后重新执行对应任务。系统服务由终端单独管理。</p>
+    <p x-show="runtimeFor()?.blocked_reason" class="text-xs text-amber-700" x-text="runtimeFor()?.blocked_reason"></p>
+    <p x-show="runtimeActionError" role="alert" class="text-xs text-rose-700" x-text="runtimeActionError"></p>
+  </section>
+
+  <div class="flex-1 flex overflow-hidden relative" id="graphLayout">
     <!-- Graph -->
     <div class="flex-1 relative min-w-0">
       <div class="absolute top-3 left-3 z-10 flex items-center gap-1.5">
@@ -570,13 +640,16 @@
       <div id="cy" class="relative z-0 flex-1 h-full"></div>
     </div>
 
-    <div @pointerdown.prevent="startPanelResize($event)" class="w-2 shrink-0 cursor-col-resize group flex items-stretch justify-center touch-none relative z-20">
+    <div @pointerdown.prevent="startPanelResize($event)" class="hidden md:flex w-2 shrink-0 cursor-col-resize group flex items-stretch justify-center touch-none relative z-20">
       <div class="w-px bg-slate-200/70 transition group-hover:bg-brand-300" :class="{ 'bg-brand-400': isResizingPanel }"></div>
     </div>
 
     <!-- Side panel -->
-    <div class="border-l border-slate-200/60 bg-white flex flex-col overflow-hidden shrink-0 relative z-20" :style="{ width: sidePanelWidth + 'px', minWidth: sidePanelWidth + 'px', flexBasis: sidePanelWidth + 'px' }">
+    <div class="runtime-aside border-l border-slate-200/60 bg-white flex flex-col overflow-hidden shrink-0 relative z-20" :class="{ 'mobile-panel-open': mobilePanelOpen }" :style="{ width: sidePanelWidth + 'px', minWidth: sidePanelWidth + 'px', flexBasis: sidePanelWidth + 'px' }">
+      <button @click="mobilePanelOpen = false" class="md:hidden text-xs text-slate-500 text-right px-3 py-2">关闭详情</button>
       <div class="flex border-b border-slate-100 shrink-0">
+        <button x-show="!replay.active && project.project.mode === 'audit'" @click="openRuntimePanel()" class="flex-1 px-3 py-2.5 text-xs font-medium"
+          :class="sideTab === 'runtime' ? 'text-teal-700 border-b-2 border-teal-600' : 'text-slate-400'">运行</button>
         <button @click="sideTab = 'detail'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'detail' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">Detail</button>
         <button @click="sideTab = 'hints'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
@@ -587,6 +660,49 @@
           :class="sideTab === 'log' ? 'text-brand-600 border-b-2 border-brand-500' : 'text-slate-400 hover:text-slate-600'">Log</button>
       </div>
 
+      <div x-show="sideTab === 'runtime'" class="flex-1 overflow-y-auto p-4 space-y-5 bg-slate-50/40">
+        <section class="space-y-2 text-xs">
+          <h3 class="font-semibold text-slate-700">资源池与实际占用</h3>
+          <p class="text-[11px] text-slate-400" x-text="connectionState !== 'online' ? '服务离线，保留上次占用快照。' : runtimeFor()?.occupancy_known ? '占用来自实际在途调用；每种 harness 的容量相加。' : '执行组件不可用，当前占用未知。'"></p>
+          <p x-show="!rolePoolRows().length" class="text-slate-400">尚无固定资源池快照。</p>
+          <template x-for="row in rolePoolRows()" :key="row.role">
+            <div class="rounded-xl border border-slate-200 bg-white p-3 space-y-1">
+              <p class="flex justify-between"><strong x-text="row.label"></strong><span class="font-mono" x-text="`${row.used == null ? '未知' : row.used} / ${row.capacity}`"></span></p>
+              <template x-for="h in row.harnesses" :key="h.harness"><p class="flex justify-between text-slate-500"><span x-text="h.harness"></span><span x-text="`${h.used == null ? '未知' : h.used} / ${h.capacity}`"></span></p></template>
+            </div>
+          </template>
+        </section>
+        <section class="text-xs space-y-2">
+          <h3 class="font-semibold">中断原因与恢复记录</h3>
+          <p class="break-words" :class="runtimeFor()?.last_error ? 'text-rose-700' : 'text-slate-500'" x-text="runtimeFor()?.last_error || '当前未记录错误。'"></p>
+          <p x-text="`阶段：${runtimePhaseLabel()} · 世代：${runtimeFor()?.generation ?? '旧运行'}`"></p>
+          <p x-text="`最近心跳：${formatTime(runtimeFor()?.last_heartbeat_at)}`"></p>
+          <p class="break-all text-[11px] text-slate-400" x-text="`run：${runtimeFor()?.run_dir || '未登记'}`"></p>
+          <template x-for="(event, index) in (runtimeFor()?.history || []).slice(-5).reverse()" :key="index">
+            <div class="border-l-2 border-slate-200 pl-2 text-[11px] space-y-1">
+              <p x-text="`${formatTime(event.at)} · ${runtimeStateLabel({state: event.event})} · 世代 ${event.generation}`"></p>
+              <p x-show="event.reason" class="break-words text-slate-500" x-text="event.reason"></p>
+              <p x-show="event.remaining_seconds != null" x-text="`恢复余额 ${formatSeconds(event.remaining_seconds)}，待重做方向 ${event.unfinished_intents ?? '未知'}`"></p>
+            </div>
+          </template>
+          <div x-show="runtimeFor()?.needs_budget" class="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+            <label for="legacy-budget" class="block">旧运行当前阶段剩余秒数</label>
+            <input id="legacy-budget" type="number" min="0" step="1" x-model="legacyRemainingSeconds" class="w-full border rounded-lg px-2 py-1" :disabled="connectionState !== 'online'">
+            <p class="text-[11px]">仅首次迁移需要此值；恢复不会重新授予完整预算。</p>
+          </div>
+        </section>
+        <section class="text-xs space-y-2">
+          <div class="flex justify-between items-center"><h3 class="font-semibold">本项目调用日志</h3><button @click="loadRuntimeLogs(runtimeLogs.selected)" :disabled="connectionState !== 'online'" class="text-teal-700 disabled:opacity-40">刷新</button></div>
+          <select :value="runtimeLogs.selected || ''" @change="loadRuntimeLogs($event.target.value)" :disabled="connectionState !== 'online'" class="w-full text-[11px] border rounded-lg px-2 py-1">
+            <option value="">无已保存回执</option>
+            <template x-for="file in runtimeLogs.files" :key="file.id"><option :value="file.id" x-text="file.id"></option></template>
+          </select>
+          <p class="text-[11px] text-slate-400" x-text="runtimeLogs.note"></p>
+          <p x-show="runtimeLogsError" class="text-rose-700" x-text="runtimeLogsError"></p>
+          <pre class="max-h-80 overflow-auto rounded-xl bg-slate-900 p-3 text-[10px] leading-relaxed text-slate-100 whitespace-pre-wrap break-all" x-show="runtimeLogs.text" x-text="runtimeLogs.text"></pre>
+        </section>
+      </div>
+
       <!-- Detail -->
       <div x-show="sideTab === 'detail'" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/40">
         <template x-if="!replay.active && project.project.audit">
@@ -594,7 +710,7 @@
             <h3 class="font-semibold text-sky-700">审计状态</h3>
             <p x-text="`阶段：${auditPhaseLabel(project.project)}`"></p>
             <p x-text="`项目状态：${project.project.status}`"></p>
-            <p x-text="`最终期限：${formatTime(project.project.audit.final_deadline)}`"></p>
+            <p x-text="runtimeFor()?.clock_mode === 'active' ? `总剩余时间：${formatSeconds(runtimeFor().total_remaining_seconds)}` : '旧运行余额需要首次确认'"></p>
             <p x-text="`结案判断：${project.project.audit.closing?.status || 'pending'}`"></p>
             <p x-show="project.project.audit.termination_reason" class="break-words" x-text="`结束原因：${project.project.audit.termination_reason}`"></p>
             <p x-show="auditLoadError" class="text-rose-600" x-text="auditLoadError"></p>
@@ -855,7 +971,7 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showNewProject = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">Cancel</button>
-      <button @click="createProject()" :disabled="!newProject.title || !newProject.origin || !newProject.goal"
+      <button data-write @click="createProject()" :disabled="(!newProject.title || !newProject.origin || !newProject.goal) || connectionState !== 'online'"
         class="px-5 py-2 text-sm bg-brand-500 text-white rounded-xl font-medium hover:bg-brand-600 transition disabled:opacity-30 shadow-sm shadow-brand-200">Create</button>
     </div>
   </div>
@@ -881,9 +997,9 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showIntentModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">Cancel</button>
-      <button @click="createIntent(false)" :disabled="!intentForm.description"
+      <button data-write @click="createIntent(false)" :disabled="(!intentForm.description) || connectionState !== 'online'"
         class="px-5 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition disabled:opacity-30">Declare</button>
-      <button @click="createIntent(true)" :disabled="!intentForm.description"
+      <button data-write @click="createIntent(true)" :disabled="(!intentForm.description) || connectionState !== 'online'"
         class="px-5 py-2 text-sm bg-brand-500 text-white rounded-xl font-medium hover:bg-brand-600 transition disabled:opacity-30 shadow-sm shadow-brand-200">Declare &amp; Claim</button>
     </div>
   </div>
@@ -929,7 +1045,7 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showCompleteModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">Cancel</button>
-      <button @click="completeProject()" :disabled="selectedFacts.length === 0 || !completeForm.description"
+      <button data-write @click="completeProject()" :disabled="(selectedFacts.length === 0 || !completeForm.description) || connectionState !== 'online'"
         class="px-5 py-2 text-sm bg-teal-500 text-white rounded-xl font-medium hover:bg-teal-600 transition disabled:opacity-30 shadow-sm shadow-teal-200">Complete</button>
     </div>
   </div>
@@ -947,7 +1063,7 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showHintModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">Cancel</button>
-      <button @click="addHint()" :disabled="!hintForm.content"
+      <button data-write @click="addHint()" :disabled="(!hintForm.content) || connectionState !== 'online'"
         class="px-5 py-2 text-sm bg-amber-500 text-white rounded-xl font-medium hover:bg-amber-600 transition disabled:opacity-30 shadow-sm shadow-amber-200">Add</button>
     </div>
 </div>
@@ -966,7 +1082,7 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showReopenModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">Cancel</button>
-      <button @click="reopenProject()" :disabled="!reopenForm.projectId || !reopenForm.description"
+      <button data-write @click="reopenProject()" :disabled="(!reopenForm.projectId || !reopenForm.description) || connectionState !== 'online'"
         class="px-5 py-2 text-sm bg-sky-500 text-white rounded-xl font-medium hover:bg-sky-600 transition disabled:opacity-30 shadow-sm shadow-sky-200">Reopen</button>
     </div>
   </div>
@@ -983,7 +1099,7 @@
     </div>
     <div class="flex justify-end gap-2 mt-5">
       <button @click="showRenameModal = false" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition">Cancel</button>
-      <button @click="renameProject()" :disabled="!renameForm.projectId || !renameForm.title"
+      <button data-write @click="renameProject()" :disabled="(!renameForm.projectId || !renameForm.title) || connectionState !== 'online'"
         class="px-5 py-2 text-sm bg-slate-800 text-white rounded-xl font-medium hover:bg-slate-900 transition disabled:opacity-30 shadow-sm">Save</button>
     </div>
   </div>
@@ -1082,7 +1198,7 @@
     </div>
     <div class="flex justify-end gap-2 mt-6">
       <button @click="closeDeleteModal()" :disabled="isDeletingProject" class="px-4 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed">Cancel</button>
-      <button @click="confirmDeleteProject()" :disabled="isDeletingProject" class="px-4 py-2 text-sm bg-rose-500 text-white rounded-xl font-medium hover:bg-rose-600 transition shadow-sm shadow-rose-200 disabled:opacity-40 disabled:cursor-not-allowed">
+      <button data-write @click="confirmDeleteProject()" :disabled="(isDeletingProject) || connectionState !== 'online'" class="px-4 py-2 text-sm bg-rose-500 text-white rounded-xl font-medium hover:bg-rose-600 transition shadow-sm shadow-rose-200 disabled:opacity-40 disabled:cursor-not-allowed">
         <span x-text="isDeletingProject ? 'Deleting...' : 'Delete'"></span>
       </button>
     </div>
@@ -1102,9 +1218,11 @@
   <span x-text="toast.message"></span>
 </div>
 
+<script src="/static/runtime-panel.js"></script>
 <script>
 function cairnApp() {
   return {
+    ...cairnRuntimePanel(),
     view: 'list',
     projects: [],
     project: null,
@@ -1174,6 +1292,7 @@ function cairnApp() {
       window.addEventListener('pointermove', this._panelResizeMove);
       window.addEventListener('pointerup', this._panelResizeStop);
       this.loadLocalPrefs();
+      await this.refreshServiceHealth();
       await this.loadProjects();
       await this.loadSettings();
       this.startPolling();
@@ -1194,29 +1313,40 @@ function cairnApp() {
       }
     },
 
-    async api(method, path, body) {
+    async api(method, path, body, headers = {}) {
+      if (this.connectionState === 'changed' && path !== '/runtime/health') {
+        throw new Error('数据库身份已变化，请连接原数据库。');
+      }
+      if (!['GET', 'HEAD'].includes(method) && (this.connectionState !== 'online' || this.isOpeningProject || (this.view === 'graph' && !this.graphSnapshotReady))) {
+        throw new Error('当前连接不可写，请先重试连接。');
+      }
       const opts = { method, headers: { 'Content-Type': 'application/json' } };
       const projectId = path.match(/^\/projects\/([^/]+)/)?.[1];
-      const metadata = this.project?.project?.id === projectId
-        ? this.project.project : this.projects.find(p => p.id === projectId);
+      const metadata = projectId && (this.project?.project?.id === projectId
+        ? this.project.project : this.projects.find(p => p.id === projectId));
       if (metadata?.runtime_generation != null) {
         opts.headers['X-Cairn-Generation'] = String(metadata.runtime_generation);
       }
+      Object.assign(opts.headers, headers);
       if (body) opts.body = JSON.stringify(body);
-      const r = await fetch(path, opts);
+      let r;
+      try { r = await fetch(path, opts); }
+      catch (e) { e.networkFailure = true; this.connectionFailure(e); throw e; }
       if (r.status === 204) return null;
       const data = await r.json();
       if (!r.ok) {
         let msg = `HTTP ${r.status}`;
         if (typeof data.detail === 'string') msg = data.detail;
         else if (Array.isArray(data.detail)) msg = data.detail.map(e => e.msg).join('; ');
+        else if (data.detail?.reason) msg = data.detail.reason;
         throw new Error(msg);
       }
       return data;
     },
 
     async fetchText(path) {
-      const r = await fetch(path);
+      if (this.connectionState !== 'online') throw new Error('请连接原数据库后再读取导出结果。');
+      const r = await fetch(path).catch(e => { e.networkFailure = true; this.connectionFailure(e); throw e; });
       const text = await r.text();
       if (!r.ok) {
         let detail = text;
@@ -1323,7 +1453,10 @@ function cairnApp() {
     },
 
     canToggleProject(project) {
-      if (!project || project.audit?.phase === 'preparing') return false;
+      if (!project || this.connectionState !== 'online') return false;
+      const runtime = this.runtimeFor(project.id);
+      if (runtime?.managed) return !['completed', 'budget_exhausted'].includes(runtime.project_status);
+      if (project.audit?.phase === 'preparing') return false;
       if (['active', 'draining'].includes(project.status)) return true;
       if (project.status !== 'stopped') return false;
       return !project.audit || (project.audit.phase === 'researching' && Date.parse(project.audit.research_deadline) > Date.now());
@@ -1376,7 +1509,7 @@ function cairnApp() {
     },
 
     projectIsActive() {
-      return !this.replay.active && this.project?.project?.status === 'active' && !this.project.project.audit?.completion_pending;
+      return this.connectionState === 'online' && this.graphSnapshotReady && !this.isOpeningProject && !this.replay.active && this.project?.project?.status === 'active' && !this.project.project.audit?.completion_pending;
     },
 
     countProjectsByStatus(status) {
@@ -1384,11 +1517,13 @@ function cairnApp() {
     },
 
     hasActiveProjects() {
-      return this.projects.some(project => project.status === 'active');
+      return this.connectionState === 'online' && this.projects.some(project => this.runtimeFor(project.id)?.managed
+        ? this.canRuntimeAction(project.id, 'pause') : project.status === 'active');
     },
 
     projectCanWriteHints() {
-      return !this.replay.active && ['active', 'stopped', 'completed', 'draining', 'budget_exhausted'].includes(this.project?.project?.status);
+      const r = this.runtimeFor();
+      return this.connectionState === 'online' && this.graphSnapshotReady && !this.isOpeningProject && (!r?.managed || r.state === 'running') && !this.replay.active && ['active', 'stopped', 'completed', 'draining', 'budget_exhausted'].includes(this.project?.project?.status);
     },
 
     canActOnSelectedFacts() {
@@ -1396,7 +1531,23 @@ function cairnApp() {
     },
 
     async loadProjects() {
-      try { this.projects = await this.api('GET', '/projects'); } catch(e) { console.error(e); }
+      if (this.connectionState !== 'online') return;
+      const navigation = this.projectNavigation, view = this.view;
+      const current = () => navigation === this.projectNavigation && view === this.view &&
+        !this.isOpeningProject && this.connectionState === 'online';
+      try {
+        const projects = await this.api('GET', '/projects');
+        if (!current()) return;
+        if (view === 'list') {
+          for (const p of projects.filter(p => p.mode === 'audit')) {
+            if (!current()) return;
+            await this.loadRuntime(p.id);
+          }
+        }
+        if (!current()) return;
+        this.projects = projects;
+        this.lastSnapshotAt = new Date().toISOString();
+      } catch(e) { this.connectionFailure(e); console.error(e); }
     },
 
     rememberProjectListScroll() {
@@ -1652,27 +1803,47 @@ function cairnApp() {
     },
 
     async loadProject(id) {
+      if (this.connectionState !== 'online') return false;
+      const navigation = this.projectNavigation, request = ++this.projectLoadRequest;
+      const current = () => id === this.selectedProjectId && navigation === this.projectNavigation &&
+        request === this.projectLoadRequest && this.connectionState === 'online' && !this.replay.active;
       try {
         const project = await this.api('GET', `/projects/${id}`);
-        if (this.selectedProjectId && this.selectedProjectId !== id) return;
-        this.project = project;
-        this.auditRequests = [];
-        this.auditLoadError = '';
+        if (!current()) return false;
+        let requests = [], auditError = '';
         if (project.project.mode === 'audit') {
+          const runtime = await this.loadRuntime(id);
+          if (!runtime || !current()) return false;
           try {
-            const requests = await this.api('GET', `/projects/${id}/audit/completions`);
-            if (this.project?.project?.id === id) this.auditRequests = requests;
+            requests = await this.api('GET', `/projects/${id}/audit/completions`);
           } catch(e) {
-            if (this.project?.project?.id === id) this.auditLoadError = `申请读取失败：${e.message}`;
+            this.connectionFailure(e);
+            auditError = `申请读取失败：${e.message}`;
           }
         }
-      } catch(e) { this.showToast(e.message, 'error'); }
+        if (!current()) return false;
+        this.project = project;
+        this.auditRequests = requests;
+        this.auditLoadError = auditError;
+        this.graphSnapshotReady = true;
+        this.lastSnapshotAt = this.runtimeFor(id)?.updated_at || new Date().toISOString();
+        return true;
+      } catch(e) {
+        this.connectionFailure(e);
+        if (current()) this.showToast(e.message, 'error');
+        return false;
+      }
     },
 
     async toggleProjectStop() {
       if (!this.selectedProjectId || !this.canToggleProject(this.project?.project)) return;
       const nextStatus = this.project.project.status === 'stopped' ? 'active' : 'stopped';
       try {
+        if (this.runtimeFor()?.managed) {
+          const action = ['running', 'preparing'].includes(this.runtimeFor().state) ? 'pause' : 'resume';
+          await this.controlRuntime(this.selectedProjectId, action);
+          return;
+        }
         await this.setProjectStatus(this.selectedProjectId, nextStatus);
       } catch (e) {
         this.showToast(e.message, 'error');
@@ -1684,6 +1855,11 @@ function cairnApp() {
       if (!projectId || !this.canToggleProject(project)) return;
       const nextStatus = currentStatus === 'stopped' ? 'active' : 'stopped';
       try {
+        const r = this.runtimeFor(projectId);
+        if (r?.managed) {
+          await this.controlRuntime(projectId, ['running', 'preparing'].includes(r.state) ? 'pause' : 'resume');
+          return;
+        }
         await this.setProjectStatus(projectId, nextStatus);
       } catch (e) {
         this.showToast(e.message, 'error');
@@ -1716,26 +1892,24 @@ function cairnApp() {
     },
 
     async stopAllActiveProjects() {
-      const activeProjects = this.projects.filter(project => project.status === 'active');
-      if (activeProjects.length === 0 || this.isStoppingAllProjects) return;
+      const targets = this.projects.filter(p => this.runtimeFor(p.id)?.managed
+        ? this.canRuntimeAction(p.id, 'pause') : p.status === 'active');
+      if (!targets.length || this.isStoppingAllProjects || this.connectionState !== 'online') return;
       this.isStoppingAllProjects = true;
+      this.batchResults = targets.map(p => ({ id: p.id, title: p.title, status: '提交中', error: '' }));
       try {
-        const results = await Promise.allSettled(
-          activeProjects.map(project => this.setProjectStatus(project.id, 'stopped', { reload: false, toast: false }))
-        );
+        await Promise.all(targets.map(async (p, index) => {
+          try {
+            if (this.runtimeFor(p.id)?.managed) await this.controlRuntime(p.id, 'pause');
+            else await this.setProjectStatus(p.id, 'stopped', { reload: false, toast: false });
+            this.batchResults[index].status = this.runtimeFor(p.id)?.managed ? '暂停已请求' : '已停止';
+          } catch (e) {
+            this.batchResults[index].status = '失败';
+            this.batchResults[index].error = e.message;
+          }
+        }));
         await this.loadProjects();
-        const successCount = results.filter(result => result.status === 'fulfilled').length;
-        const failureCount = results.length - successCount;
-        if (failureCount === 0) {
-          this.showToast(`Stopped ${successCount} active project${successCount === 1 ? '' : 's'}`);
-        } else {
-          this.showToast(`Stopped ${successCount} projects, ${failureCount} failed`, 'error');
-        }
-      } catch (e) {
-        this.showToast(e.message, 'error');
-      } finally {
-        this.isStoppingAllProjects = false;
-      }
+      } finally { this.isStoppingAllProjects = false; }
     },
 
     openReopenProject(projectId, projectTitle = '') {
@@ -2149,39 +2323,61 @@ function cairnApp() {
     },
 
     async openProject(id) {
-      if (this.replay.active) {
-        this.stopReplayTimer();
-        this.replay.active = false;
-        this.replay.playing = false;
-        this.replay.frames = [];
-        this.replay.visibleEvents = [];
-        this.replay.frameIndex = -1;
-        this.replay.sourceProject = null;
-        this._timelineEventsCacheProject = null;
-        this._timelineEventsCache = [];
-        this.polling = true;
-      }
-      this.rememberProjectListScroll();
-      this.selectedProjectId = id;
-      this.selectedNode = null;
-      this.selectedFacts = [];
-      this.selectedTimelineEntryId = null;
-      await this.loadProject(id);
-      this.view = 'graph';
-      if (location.hash !== `#/projects/${id}`) location.hash = `/projects/${id}`;
-      this.$nextTick(() => {
-        const clampedWidth = this.clampPanelWidth(this.sidePanelWidth);
-        if (clampedWidth !== this.sidePanelWidth) {
-          this.sidePanelWidth = clampedWidth;
-          this.saveSidePanelWidth();
+      const navigation = ++this.projectNavigation;
+      const current = () => navigation === this.projectNavigation && this.selectedProjectId === id;
+      this.isOpeningProject = true;
+      this.graphSnapshotReady = false;
+      this.stopRunningAnimations();
+      try {
+        if (this.replay.active) {
+          this.stopReplayTimer();
+          this.replay.active = false;
+          this.replay.playing = false;
+          this.replay.frames = [];
+          this.replay.visibleEvents = [];
+          this.replay.frameIndex = -1;
+          this.replay.sourceProject = null;
+          this._timelineEventsCacheProject = null;
+          this._timelineEventsCache = [];
+          this.polling = true;
         }
-        this.teardownAutoFit();
-        if (this.cy) { this.cy.destroy(); this.cy = null; }
-        this.initGraph();
-      });
+        this.rememberProjectListScroll();
+        this.selectedProjectId = id;
+        this.runtimeActionError = '';
+        this.runtimeLogsError = '';
+        this.runtimeLogsRequest++;
+        this.runtimeLogs = { files: [], selected: null, text: '', note: '' };
+        this.legacyRemainingSeconds = '';
+        this.selectedNode = null;
+        this.selectedFacts = [];
+        this.selectedTimelineEntryId = null;
+        if (!await this.refreshServiceHealth() || !current()) return;
+        if (!await this.loadProject(id) || !current()) return;
+        if (!this.project || this.project.project.id !== id) return;
+        this.view = 'graph';
+        if (location.hash !== `#/projects/${id}`) location.hash = `/projects/${id}`;
+        this.$nextTick(() => {
+          if (!current() || this.view !== 'graph') return;
+          const clampedWidth = this.clampPanelWidth(this.sidePanelWidth);
+          if (clampedWidth !== this.sidePanelWidth) {
+            this.sidePanelWidth = clampedWidth;
+            this.saveSidePanelWidth();
+          }
+          this.teardownAutoFit();
+          if (this.cy) { this.cy.destroy(); this.cy = null; }
+          this.initGraph();
+        });
+      } finally {
+        if (navigation === this.projectNavigation) this.isOpeningProject = false;
+      }
     },
 
     backToList(fromRoute) {
+      this.projectNavigation++;
+      this.projectLoadRequest++;
+      this.runtimeLogsRequest++;
+      this.isOpeningProject = false;
+      this.graphSnapshotReady = false;
       if (this.replay.active) {
         this.stopReplayTimer();
         this.replay.active = false;
@@ -2209,14 +2405,18 @@ function cairnApp() {
 
     startPolling() {
       this.pollTimer = setInterval(async () => {
-        if (!this.polling) return;
-        if (this.selectedProjectId && this.view === 'graph') {
-          await this.loadProject(this.selectedProjectId);
-          this.updateGraph();
-        } else {
-          await this.loadProjects();
-        }
-      }, 5000);
+        if (this.pollBusy || this.isOpeningProject) return;
+        this.pollBusy = true;
+        try {
+          if (!await this.refreshServiceHealth() || !this.polling) return;
+          if (this.selectedProjectId && this.view === 'graph') {
+            await this.loadProject(this.selectedProjectId);
+            this.updateGraph();
+          } else {
+            await this.loadProjects();
+          }
+        } finally { this.pollBusy = false; }
+      }, 2000);
     },
 
     buildElements() {
@@ -2478,48 +2678,69 @@ function cairnApp() {
       this.refreshGraphDecorations();
     },
 
+    canAnimateGraph() {
+      const runtime = this.runtimeFor();
+      return this.connectionState === 'online' && !this.isOpeningProject &&
+        (this.replay.active || (this.graphSnapshotReady &&
+          (!runtime?.managed || ['running', 'pausing'].includes(runtime.state))));
+    },
+
+    stopRunningAnimations() {
+      if (!this.cy) return;
+      this.cy.nodes().forEach(node => {
+        if (!node.scratch('_pulseActive')) return;
+        node.removeScratch('_pulseActive');
+        node.stop(true, false);
+        node.removeStyle('background-opacity');
+      });
+      this.cy.edges().forEach(edge => {
+        if (!edge.scratch('_flowActive')) return;
+        edge.removeScratch('_flowActive');
+        edge.stop(true, false);
+        edge.removeStyle('line-dash-offset');
+      });
+    },
+
     pulseActive() {
       if (!this.cy) return;
+      if (!this.canAnimateGraph()) { this.stopRunningAnimations(); return; }
       this.cy.nodes('[nodeType="in_progress"], [nodeType="bootstrap_running"]').forEach(node => {
         if (node.scratch('_pulseActive')) return;
-        node.scratch('_pulseActive', true);
+        const token = Symbol('pulse');
+        node.scratch('_pulseActive', token);
+        const live = () => this.canAnimateGraph() && node.inside() &&
+          node.scratch('_pulseActive') === token && ['in_progress', 'bootstrap_running'].includes(node.data('nodeType'));
         const isBootstrap = node.data('nodeType') === 'bootstrap_running';
         const minOpacity = isBootstrap ? 0.55 : 0.35;
         const maxOpacity = isBootstrap ? 0.98 : 0.8;
-        const pulseOut = () => {
-          if (!node.inside()) {
-            node.removeScratch('_pulseActive');
+        const animate = (opacity, next) => {
+          if (!live()) {
+            if (node.scratch('_pulseActive') === token) { node.removeScratch('_pulseActive'); node.removeStyle('background-opacity'); }
             return;
           }
-          node.animate({ style:{'background-opacity':minOpacity} }, { duration:900, complete: pulseIn });
+          node.animate({ style:{'background-opacity':opacity} }, { duration:900, complete:next });
         };
-        const pulseIn = () => {
-          if (!node.inside()) {
-            node.removeScratch('_pulseActive');
-            return;
-          }
-          node.animate({ style:{'background-opacity':maxOpacity} }, { duration:900, complete: pulseOut });
-        };
+        const pulseOut = () => animate(minOpacity, pulseIn);
+        const pulseIn = () => animate(maxOpacity, pulseOut);
         pulseOut();
       });
       this.cy.edges('[status="in_progress"], [status="bootstrap_running"]').forEach(edge => {
         if (edge.scratch('_flowActive')) return;
-        edge.scratch('_flowActive', true);
+        const token = Symbol('flow');
+        edge.scratch('_flowActive', token);
+        const live = () => this.canAnimateGraph() && edge.inside() && edge.scratch('_flowActive') === token &&
+          ['in_progress', 'bootstrap_running'].includes(edge.data('status'));
         const isBootstrap = edge.data('status') === 'bootstrap_running';
         const dashOffset = isBootstrap ? -16 : -12;
         const flow = () => {
-          if (!edge.inside() || !['in_progress', 'bootstrap_running'].includes(edge.data('status'))) {
-            edge.removeScratch('_flowActive');
+          if (!live()) {
+            if (edge.scratch('_flowActive') === token) { edge.removeScratch('_flowActive'); edge.removeStyle('line-dash-offset'); }
             return;
           }
           edge.animate({ style:{'line-dash-offset':dashOffset} }, {
             duration:isBootstrap ? 620 : 700,
             complete:() => {
-              if (!edge.inside() || !['in_progress', 'bootstrap_running'].includes(edge.data('status'))) {
-                edge.removeScratch('_flowActive');
-                return;
-              }
-              edge.style('line-dash-offset', 0);
+              if (live()) edge.style('line-dash-offset', 0);
               flow();
             }
           });
@@ -2722,6 +2943,7 @@ function cairnApp() {
     },
 
     onNodeTap(e) {
+      this.mobilePanelOpen = true;
       const node = e.target;
       const id = node.data('id');
       const nt = node.data('nodeType');

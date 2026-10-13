@@ -107,7 +107,9 @@ def test_plain_viewer_is_not_an_execution_service(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
     db.configure(tmp_path / "viewer.db")
     with TestClient(app) as client:
-        assert client.get("/runtime/health").json() == {"managed": False, "ready": False}
+        health = client.get("/runtime/health").json()
+        assert health["managed"] is False and health["ready"] is False
+        assert health["database_id"] is None and health["service_id"] is None
 
 
 @pytest.mark.parametrize("server", ["http://127.0.0.1", "http://127.0.0.1:0", "https://localhost:8000",

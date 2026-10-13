@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from cairn.dispatcher.config import LocalConfig
@@ -25,6 +27,31 @@ class LocalBackend:
         self._config = config
         root = config.workspace_root
         self._root = Path(root).expanduser() if root else Path.cwd()
+        self._calls = {}
+        self._calls_lock = threading.Lock()
+
+    @contextmanager
+    def observe_call(self, workspace, worker, phase):
+        role = phase.removesuffix("_format_repair").removesuffix("_execute").removesuffix("_conclude")
+        if role == "builder":
+            role = "build"
+        key = (str(Path(workspace).resolve()), role, worker.type)
+        with self._calls_lock:
+            self._calls[key] = self._calls.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            with self._calls_lock:
+                self._calls[key] -= 1
+                if not self._calls[key]:
+                    del self._calls[key]
+
+    def active_calls(self, workspace=None):
+        path = str(Path(workspace).resolve()) if workspace else None
+        with self._calls_lock:
+            return [{"role": role, "harness": harness, "count": count}
+                    for (folder, role, harness), count in self._calls.items()
+                    if path is None or folder == path]
 
     def close(self) -> None:
         return None

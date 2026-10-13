@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request
+import json
 from pydantic import BaseModel, Field
 
 from cairn.server.db import get_conn
@@ -33,7 +34,13 @@ def managed(request: Request):
 @router.get("/runtime/health")
 def health(request: Request):
     service = getattr(request.app.state, "managed_service", None)
-    return service.health() if service else {"managed": False, "ready": False}
+    from cairn.server.runtime_panel import startup_instruction
+    if service:
+        return {**service.health(), "manual_start": startup_instruction(service), "server": service.config.server}
+    with get_conn() as conn:
+        row = conn.execute("SELECT database_id FROM service_identity WHERE singleton=1").fetchone()
+    return {"managed": False, "ready": False, "database_id": row[0] if row else None,
+            "service_id": None, "manual_start": startup_instruction(None)}
 
 
 @router.post("/audit-submissions", status_code=202)
@@ -73,9 +80,9 @@ def project_runtime(project_id: str, request: Request):
     from cairn.server.services import audit_metadata, get_project_or_404
     service = getattr(request.app.state, "managed_service", None)
     with get_conn() as conn:
+        project = get_project_or_404(conn, project_id)
         metadata = audit_metadata(conn, project_id)
         if metadata is None:
-            get_project_or_404(conn, project_id)
             raise HTTPException(404, "Project is not an audit")
         data = runtime.view(conn, metadata)
         clock = runtime.BudgetClock(conn, metadata)
@@ -86,24 +93,37 @@ def project_runtime(project_id: str, request: Request):
         for completion in list_completions(conn, metadata):
             end = clock.deadline(completion, "attempt_deadline")
             data["review_remaining_seconds"][completion.id] = max(0, end-clock.now) if end is not None else None
+        identity = conn.execute("SELECT database_id FROM service_identity WHERE singleton=1").fetchone()
         data.update(project_id=project_id, managed=service is not None,
                     service_id=service.service_id if service else None,
-                    database_id=service.database_id if service else None)
-        row = conn.execute("SELECT run_dir,id FROM audit_submissions WHERE project_id=?", (project_id,)).fetchone()
-        data["run_dir"] = row["run_dir"] if row else str(db._db_path.parent)
-        data["submission_id"] = row["id"] if row else None
-        return data
+                    database_id=service.database_id if service else identity[0] if identity else None)
+        from cairn.server.runtime_panel import panel_snapshot
+        return panel_snapshot(conn, metadata, project, data, service)
+
+
+@router.get("/projects/{project_id}/runtime/logs")
+def runtime_logs(project_id: str, log: str | None = None):
+    from cairn.server.services import audit_metadata, get_project_or_404
+    from cairn.server.runtime_panel import project_logs
+    with get_conn() as conn:
+        get_project_or_404(conn, project_id)
+        metadata = audit_metadata(conn, project_id)
+        if metadata is None:
+            raise HTTPException(404, "Project is not an audit")
+        row = conn.execute("SELECT prepared_json FROM audit_submissions WHERE project_id=?", (project_id,)).fetchone()
+        prepared_run = json.loads(row[0]).get("run_dir") if row else None
+    return project_logs(metadata, log, prepared_run)
 
 
 @router.post("/projects/{project_id}/runtime/pause", status_code=202)
 def pause_project(project_id: str, body: RuntimeAction, request: Request):
     service = control_service(request, body)
-    service.pause(project_id)
+    service.pause(project_id, request.headers.get("X-Cairn-Generation"))
     return project_runtime(project_id, request)
 
 
 @router.post("/projects/{project_id}/runtime/resume", status_code=202)
 def resume_project(project_id: str, body: RuntimeAction, request: Request):
     service = control_service(request, body)
-    service.resume(project_id, body.remaining_seconds)
+    service.resume(project_id, body.remaining_seconds, request.headers.get("X-Cairn-Generation"))
     return project_runtime(project_id, request)

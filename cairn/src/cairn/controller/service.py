@@ -51,6 +51,7 @@ class ManagedService:
         self._stop = threading.Event()
         self.error = None
         self.jobs = {}
+        self.backends = {}
         self._pause_cleanups = {}
         self.executor = ThreadPoolExecutor(max_workers=config.runtime.max_running_projects, thread_name_prefix="cairn-project")
         self.dispatch_thread = threading.Thread(target=self._dispatch, name="cairn-dispatcher", daemon=True)
@@ -78,6 +79,13 @@ class ManagedService:
         return {"managed": True, "service_id": self.service_id, "database_id": self.database_id,
                 "ready": bool(dispatcher_ready and controller_ready and not self._stop.is_set() and not self.error),
                 "dispatcher_ready": dispatcher_ready, "controller_ready": controller_ready, "error": self.error}
+
+    def active_calls(self, project_id, workspace, submission_id):
+        calls = self.dispatcher.container_manager.active_calls(workspace) if workspace else []
+        backend = self.backends.get(submission_id)
+        if backend is not None:
+            calls += backend.active_calls()
+        return calls
 
     def _dispatch(self):
         self.dispatcher.on_failure = lambda exc: self._fail(f"Dispatcher stopped: {type(exc).__name__}: {exc}")
@@ -307,6 +315,7 @@ class ManagedService:
         config.server = self.config.server
         prepared = json.loads(row["prepared_json"])
         backend = LocalBackend(config.local)
+        self.backends[row["id"]] = backend
         project_id = row["project_id"]
         restoring = project_id is not None
         with closing(CairnClient(config.server, trust_env=False,
@@ -388,6 +397,7 @@ class ManagedService:
                 LOG.warning("submission stopped submission=%s error=%s", row["id"], exc)
             finally:
                 backend.close()
+                self.backends.pop(row["id"], None)
 
     def close(self):
         if self._stop.is_set():

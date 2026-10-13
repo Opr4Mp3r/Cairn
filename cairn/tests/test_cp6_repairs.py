@@ -132,7 +132,19 @@ def run_ui(fixture, checks):
         pytest.skip("Node required for original UI async handlers")
     html = (ROOT / "cairn/src/cairn/server/static/index.html").read_text()
     code = "function cairnApp()" + html.split("<script>\nfunction cairnApp()", 1)[1].split("</script>", 1)[0]
-    source = "const assert=require('node:assert/strict');const location={hash:''};const fixture=" + json.dumps(fixture) + ";\n" + code + checks
+    runtime_ui = (ROOT / "cairn/src/cairn/server/static/runtime-panel.js").read_text()
+    online = """
+const originalApp = cairnApp;
+cairnApp = () => {
+  const app = originalApp();
+  app.connectionState = 'online';
+  app.graphSnapshotReady = true;
+  app.refreshServiceHealth = async () => true;
+  app.loadRuntime = async () => ({});
+  return app;
+};
+"""
+    source = "const assert=require('node:assert/strict');const location={hash:''};const fixture=" + json.dumps(fixture) + ";\n" + runtime_ui + code + online + checks
     result = subprocess.run([node, "-e", source], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
 

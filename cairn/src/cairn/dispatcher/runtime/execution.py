@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
 from cairn.dispatcher.config import WorkerConfig
 from cairn.dispatcher.runtime.backend import ExecutionBackend
@@ -37,31 +37,33 @@ def run_worker_process(
     process = container_manager.build_exec_process(
         container_name, dict(worker.env), argv, timeout_seconds=timeout_seconds,
     )
-    started = False
-    try:
-        process.start()
-        started = True
-        if lease is not None:
-            lease.attach_process(process)
-        if cancellation is not None:
-            cancellation.attach_process(process)
-        return process.communicate(timeout=communicate_timeout(timeout_seconds))
-    except KeyboardInterrupt as exc:
-        reason = str(exc) or "worker execution interrupted"
-        process.cancel(reason)
-        if not started:
-            return ProcessResult(130, "", "", cancelled=True, cancel_reason=reason)
-        # 取消后收集同一进程，保留已经产生的 stdout 和 stderr。
-        result = process.communicate(timeout=PROCESS_COMMUNICATE_GRACE_SECONDS)
-        result.cancelled = True
-        result.cancel_reason = result.cancel_reason or reason
-        return result
-    except BaseException:
-        with suppress(Exception):
-            process.cancel("worker execution interrupted")
-        raise
-    finally:
-        if lease is not None:
-            lease.attach_process(None)
-        if cancellation is not None:
-            cancellation.attach_process(None)
+    observer = getattr(container_manager, "observe_call", None)
+    with observer(container_name, worker, phase) if observer else nullcontext():
+        started = False
+        try:
+            process.start()
+            started = True
+            if lease is not None:
+                lease.attach_process(process)
+            if cancellation is not None:
+                cancellation.attach_process(process)
+            return process.communicate(timeout=communicate_timeout(timeout_seconds))
+        except KeyboardInterrupt as exc:
+            reason = str(exc) or "worker execution interrupted"
+            process.cancel(reason)
+            if not started:
+                return ProcessResult(130, "", "", cancelled=True, cancel_reason=reason)
+            # 取消后收集同一进程，保留已经产生的 stdout 和 stderr。
+            result = process.communicate(timeout=PROCESS_COMMUNICATE_GRACE_SECONDS)
+            result.cancelled = True
+            result.cancel_reason = result.cancel_reason or reason
+            return result
+        except BaseException:
+            with suppress(Exception):
+                process.cancel("worker execution interrupted")
+            raise
+        finally:
+            if lease is not None:
+                lease.attach_process(None)
+            if cancellation is not None:
+                cancellation.attach_process(None)

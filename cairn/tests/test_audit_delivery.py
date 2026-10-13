@@ -144,6 +144,8 @@ def test_ui_audit_state_matches_server_semantics():
     checks = """
 const assert = require('node:assert/strict');
 const app = cairnApp();
+app.connectionState = 'online';
+app.graphSnapshotReady = true;
 const audit = {status:'active',mode:'audit',audit:{phase:'researching',completion_pending:true}};
 app.project = {project:audit};
 assert.equal(app.auditPhaseLabel(), '待独立验收');
@@ -161,7 +163,8 @@ assert.equal(app.completionResultLabel({}), 'Project completed');
 app.project.project.status = 'budget_exhausted';
 assert.equal(app.projectCanWriteHints(), true);
 """
-    subprocess.run([node, "-e", "function cairnApp()" + code + checks], check=True, capture_output=True, text=True)
+    runtime_ui = (ROOT / "cairn/src/cairn/server/static/runtime-panel.js").read_text()
+    subprocess.run([node, "-e", runtime_ui + "\nfunction cairnApp()" + code + checks], check=True, capture_output=True, text=True)
     assert "证据状态" in html and "auditRequests" in html
 
 
