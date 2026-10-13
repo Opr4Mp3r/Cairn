@@ -1196,6 +1196,12 @@ function cairnApp() {
 
     async api(method, path, body) {
       const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      const projectId = path.match(/^\/projects\/([^/]+)/)?.[1];
+      const metadata = this.project?.project?.id === projectId
+        ? this.project.project : this.projects.find(p => p.id === projectId);
+      if (metadata?.runtime_generation != null) {
+        opts.headers['X-Cairn-Generation'] = String(metadata.runtime_generation);
+      }
       if (body) opts.body = JSON.stringify(body);
       const r = await fetch(path, opts);
       if (r.status === 204) return null;

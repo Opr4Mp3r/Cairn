@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 import uuid
@@ -18,6 +18,7 @@ from cairn.server.services import (
     next_hint_id, next_intent_id, next_review_id, utcnow,
 )
 from cairn.server.audit_budget import control_window, existing_research
+from cairn.server.runtime import BudgetClock, freeze
 
 
 def _datetime(value: str) -> datetime:
@@ -220,10 +221,11 @@ def _refresh_completion(conn, metadata: AuditMetadata, request: AuditCompletion)
         request.decision = request.error = None
         request.review_token = request.review_owner = None
         request.round_deadline = request.attempt_deadline = None
+        request.round_deadline_seconds = request.attempt_deadline_seconds = None
         request.attempts = 0
     elif request.status == "pending" and request.audit_revision != metadata.audit_revision:
         request.status = "stale"
-    if request.review_token and request.attempt_deadline and utcnow() >= request.attempt_deadline:
+    if request.review_token and BudgetClock(conn, metadata).due(request, "attempt_deadline"):
         request.status = "review_error"
         request.error = "审核调用或回执超过本次期限，未产生证据判断"
         request.review_token = request.review_owner = None
@@ -241,7 +243,8 @@ def list_completions(conn, metadata: AuditMetadata) -> list[AuditCompletion]:
 def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest, *, closing=False) -> AuditCompletion:
     control_window(conn, metadata)
     row = get_project_or_404(conn, metadata.project_id)
-    if not closing and (row["status"] == "draining" or utcnow() >= metadata.research_deadline):
+    clock = BudgetClock(conn, metadata)
+    if not closing and (row["status"] == "draining" or clock.now >= clock.research_end):
         if metadata.phase == "finalizing":
             raise HTTPException(403, "Only persisted closing candidates may submit after research is closed")
         scope = next((scope for scope, lease in metadata.leases.items()
@@ -250,7 +253,7 @@ def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest, *, c
             intent = conn.execute("SELECT to_fact_id FROM intents WHERE project_id=? AND id=?",
                                   (metadata.project_id, scope.split(":", 1)[1])).fetchone()
             if (intent is None or intent["to_fact_id"] not in body.from_ or body.lease_id not in metadata.draining_lease_ids
-                    or utcnow() >= metadata.drain_deadline):
+                    or clock.now >= clock.drain_end):
                 raise HTTPException(409, "Intent completion must use its admitted result")
         else:
             existing_research(conn, metadata.project_id, scope, body.worker, body.lease_id)
@@ -278,8 +281,9 @@ def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest, *, c
 def claim_completion(conn, metadata: AuditMetadata, request: AuditCompletion, body: CompletionClaimRequest) -> AuditCompletion:
     control_window(conn, metadata)
     request = _refresh_completion(conn, metadata, request)
-    now = _datetime(utcnow())
-    if metadata.final_deadline is None or now >= _datetime(metadata.final_deadline):
+    clock = BudgetClock(conn, metadata)
+    now = clock.now
+    if clock.final_end is None or now >= clock.final_end:
         raise HTTPException(409, "Final review deadline exhausted")
     if request.status in ("approved", "rejected", "needs_evidence"):
         raise HTTPException(409, "No new proof evidence to review")
@@ -287,21 +291,21 @@ def claim_completion(conn, metadata: AuditMetadata, request: AuditCompletion, bo
         raise HTTPException(409, "Review attempt is already running")
     if body.retry and request.status not in ("review_error", "stale"):
         raise HTTPException(409, "Explicit retry only applies to execution errors or stale reviews")
-    if request.round_deadline is None or body.retry:
+    if clock.deadline(request, "round_deadline") is None or body.retry:
         request.max_attempts = body.max_attempts
         request.attempts = 0
         try:
-            deadline = min(now + timedelta(seconds=body.timeout_seconds * body.max_attempts), _datetime(metadata.final_deadline))
+            deadline = min(now + body.timeout_seconds * body.max_attempts, clock.final_end)
         except OverflowError as exc:
             raise HTTPException(422, "Review time budget is out of range") from exc
-        request.round_deadline = _timestamp(deadline)
-    if request.attempts >= request.max_attempts or now >= _datetime(request.round_deadline):
+        clock.set_deadline(request, "round_deadline", deadline)
+    if request.attempts >= request.max_attempts or clock.due(request, "round_deadline"):
         raise HTTPException(409, "Review round exhausted; an explicit retry is required")
     request.attempts += 1
     request.status = "pending"
     request.review_token = uuid.uuid4().hex
     request.review_owner = body.owner
-    request.attempt_deadline = _timestamp(min(now + timedelta(seconds=body.timeout_seconds), _datetime(request.round_deadline)))
+    clock.set_deadline(request, "attempt_deadline", min(now + body.timeout_seconds, clock.deadline(request, "round_deadline")))
     request.audit_revision = metadata.audit_revision
     request.updated_at = utcnow()
     _save_completion(conn, request)
@@ -336,9 +340,10 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
     control_window(conn, metadata)
     if request.review_token != body.token or body.record.object_id != metadata.project_id:
         raise HTTPException(409, "Review attempt no longer owns this request")
-    if not metadata.final_deadline or utcnow() >= metadata.final_deadline:
+    clock = BudgetClock(conn, metadata)
+    if clock.final_end is None or clock.now >= clock.final_end:
         raise HTTPException(409, "Final review deadline exhausted")
-    if body.record.attempt_status == "success" and request.attempt_deadline and utcnow() >= request.attempt_deadline:
+    if body.record.attempt_status == "success" and clock.due(request, "attempt_deadline"):
         raise HTTPException(409, "Review attempt deadline exhausted")
     if body.record.input_digest != request.proof_digest:
         raise HTTPException(400, "Review record is not bound to this proof")
@@ -378,6 +383,7 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
         conn.executemany("INSERT INTO intent_sources VALUES (?, ?, ?)",
                          [(edge, metadata.project_id, fact_id) for fact_id in request.from_])
         conn.execute("UPDATE projects SET status='completed' WHERE id=?", (metadata.project_id,))
+        freeze(conn, metadata.project_id, "finished", "goal_approved")
         metadata.phase = "closed"
         metadata.termination_reason = "goal_approved"
         from cairn.server.services import save_audit_metadata

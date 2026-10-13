@@ -130,6 +130,9 @@ def create_audit(body: CreateAuditRequest, request: Request,
         conn.execute("INSERT INTO audits VALUES (?, ?)", (project_id, json_text(metadata.model_dump(mode="json"))))
         if owner is not None:
             conn.execute("UPDATE audit_submissions SET project_id=?,updated_at=? WHERE id=?", (project_id, now, owner["id"]))
+            if getattr(request.app.state.managed_service, "runtime_enabled", False):
+                from cairn.server.runtime import initialize
+                initialize(conn, project_id)
         project = get_project_or_404(conn, project_id)
         facts = conn.execute("SELECT * FROM facts WHERE project_id = ? ORDER BY rowid", (project_id,)).fetchall()
         hints = conn.execute("SELECT * FROM hints WHERE project_id = ? ORDER BY rowid", (project_id,)).fetchall()
@@ -184,6 +187,8 @@ def start_audit(project_id: str, request: Request,
         metadata.final_deadline = final.strftime("%Y-%m-%dT%H:%M:%SZ")
         save_audit_metadata(conn, metadata)
         conn.execute("UPDATE projects SET status = 'active' WHERE id = ?", (project_id,))
+        from cairn.server.runtime import activate
+        activate(conn, project_id)
         return metadata
 
 

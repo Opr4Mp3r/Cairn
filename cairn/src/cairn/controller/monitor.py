@@ -64,11 +64,27 @@ def _remaining(deadline: str) -> int:
     return int((end - datetime.now(timezone.utc)).total_seconds()) - 5
 
 
+def _budget_remaining(client, project, *, request_id=None, closing=False):
+    if project.project.runtime_generation is None:
+        return None
+    data = client.get_runtime(project.project.id)
+    if closing:
+        value = data["closing_remaining_seconds"]
+    elif request_id:
+        value = data["review_remaining_seconds"][request_id]
+    else:
+        value = data["total_remaining_seconds"]
+    return max(0, int(value) - 5) if value is not None else 0
+
+
 def _invoke(config, client, backend, project, *, phase, context, model, timeout, cancellation, worker=None):
     if cancellation.is_cancelled:
         raise KeyboardInterrupt(cancellation.reason or "controller cancelled before Agent call")
     workspace = Path(research_workspace(config, client, backend, project))
-    folder = workspace / "controller-reviews" / f"{phase}-{uuid.uuid4().hex}"
+    folder = workspace / "controller-reviews"
+    if project.project.runtime_generation is not None:
+        folder /= f"generation-{project.project.runtime_generation:03d}"
+    folder /= f"{phase}-{uuid.uuid4().hex}"
     folder.mkdir(parents=True)
     payload = {**agent_view(context), "repo_path": project.project.audit.repo_path,
                "materials": material_paths(workspace),
@@ -146,7 +162,8 @@ def _review_items(config, client, project_id, targets, cancellation):
             return
         if kind == "intent" and project.project.audit.phase == "finalizing":
             continue
-        timeout = min(config.controller.timeouts.overseer, _remaining(project.project.audit.final_deadline))
+        timeout = min(config.controller.timeouts.overseer,
+                      _budget_remaining(client, project) if project.project.runtime_generation is not None else _remaining(project.project.audit.final_deadline))
         if timeout <= 0:
             return
         inputs = client.get_review_input(project_id, kind, object_id)
@@ -154,7 +171,8 @@ def _review_items(config, client, project_id, targets, cancellation):
                    if record.phase == "overseer" and record.object_type == kind and record.object_id == object_id]
         if any(record.attempt_status == "success" and inputs["input_digest"] in (record.input_digest, record.output_digest) for record in records):
             continue
-        attempts = sum(record.input_digest == inputs["input_digest"] for record in records)
+        attempts = sum(record.input_digest == inputs["input_digest"] and (project.project.runtime_generation is None or
+                       record.record_key.startswith(f"overseer:g{project.project.runtime_generation}:")) for record in records)
         if attempts < config.controller.review.max_attempts:
             yield kind, object_id, inputs, attempts, project, timeout
 
@@ -206,7 +224,8 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
             success = result.status == "success"
             data = NodeAssessment.model_validate(result.data) if success else None
             body = AuditRecordRequest(
-                record_key=f"overseer:{kind}:{object_id}:{inputs['input_digest']}:{attempts + 1}",
+                record_key=(f"overseer:g{project.project.runtime_generation}:{kind}:{object_id}:{inputs['input_digest']}:{attempts + 1}"
+                            if project.project.runtime_generation is not None else f"overseer:{kind}:{object_id}:{inputs['input_digest']}:{attempts + 1}"),
                 object_type=kind, object_id=object_id, input_digest=inputs["input_digest"], phase="overseer",
                 session=result.session, attempt_status="success" if success else "error",
                 decision=data.decision if data else None, error=None if success else result.error or result.status,
@@ -220,7 +239,8 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
                 body = body.model_copy(update={"attempt_status": "error", "decision": None, "fact_audit": None,
                                               "hint": None, "error": f"复核结果未满足服务端证据约束：{response.text}"})
                 response = client.record_audit_review(project_id, body)
-            if response.status_code == 409 and _remaining(project.project.audit.final_deadline) <= 0:
+            if response.status_code == 409 and (
+                    _budget_remaining(client, project) if project.project.runtime_generation is not None else _remaining(project.project.audit.final_deadline)) <= 0:
                 break
             _require_ok(response, "apply Overseer review")
             reviewed += 1
@@ -255,7 +275,8 @@ def monitor_once(config: DispatchConfig, client, backend, project_id: str, *, ca
         request = AuditCompletion.model_validate(_require_ok(response, "claim final review"))
         if explicit_retry:
             retry_consumed = request.id
-        timeout = min(config.controller.timeouts.final_review, _remaining(request.attempt_deadline))
+        timeout = min(config.controller.timeouts.final_review,
+                      _budget_remaining(client, project, request_id=request.id) if project.project.runtime_generation is not None else _remaining(request.attempt_deadline))
         if timeout <= 0:
             continue
         project = client.get_project(project_id)
@@ -320,7 +341,8 @@ def _closing_once(config, client, backend, project, cancellation):
         return
     closing = AuditClosing.model_validate(_require_ok(response, "claim read-only closing"))
     if closing.status != "success":
-        timeout = min(config.controller.timeouts.closing, _remaining(closing.attempt_deadline))
+        timeout = min(config.controller.timeouts.closing,
+                      _budget_remaining(client, project, closing=True) if project.project.runtime_generation is not None else _remaining(closing.attempt_deadline))
         if timeout <= 0:
             return
         project = client.get_project(project_id)

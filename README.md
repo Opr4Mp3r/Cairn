@@ -213,7 +213,7 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 | [在线服务指南](docs/managed-service.md) | 人工 up、纯客户端 submit、提交修订与配置快照 |
 | [Kritt 取材探针](docs/kritt-probe.md) | 只读查询与源码观察，不创建研究项目 |
 | [本地 audit 模式](docs/audit-local.md) | 已有独立审计路径，包含复核、终审及预算 |
-| [任务恢复与运行面板方案](docs/specs/task-recovery-mvp.md) | REC-CP1 待验收；图级恢复与运行面板待开发 |
+| [任务恢复与运行面板方案](docs/specs/task-recovery-mvp.md) | REC-CP1 已验收；REC-CP2 图级恢复待验收，运行面板待开发 |
 
 原 `uv run --project cairn cairn builder ...` 保留为已有自动化的批处理兼容入口。其内部 Builder 会话及前台研究生命周期与原生 Skill 入口不同；新交互任务使用 Skill。
 

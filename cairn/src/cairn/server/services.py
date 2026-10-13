@@ -27,17 +27,20 @@ def audit_metadata(conn: sqlite3.Connection, project_id: str) -> AuditMetadata |
 
 def has_pending_completion(conn: sqlite3.Connection, project_id: str) -> bool:
     rows = conn.execute("SELECT data_json FROM audit_completions WHERE project_id=?", (project_id,)).fetchall()
-    now = utcnow()
+    from cairn.server import runtime
+    clock = runtime.load(conn, project_id)
+    now = runtime.elapsed(clock) if clock else runtime.seconds(utcnow())
     for row in rows:
         request = json.loads(row["data_json"])
         if request["status"] not in ("pending", "stale", "review_error"):
             continue
-        deadline = request["round_deadline"]
+        deadline = request.get("round_deadline_seconds") if clock else runtime.seconds(request["round_deadline"])
         if deadline is None:
             return True
         if now >= deadline:
             continue
-        if request["review_token"] and request["attempt_deadline"] and now < request["attempt_deadline"]:
+        attempt = request.get("attempt_deadline_seconds") if clock else runtime.seconds(request["attempt_deadline"])
+        if request["review_token"] and attempt is not None and now < attempt:
             return True  # 最后一次审核仍在执行时继续暂停，不因 attempts 到上限抢先派发。
         if request["attempts"] < request["max_attempts"]:
             return True
@@ -273,6 +276,8 @@ def project_reason_from_row(row: sqlite3.Row) -> ProjectReason | None:
 
 
 def project_meta_from_row(row: sqlite3.Row, conn: sqlite3.Connection) -> ProjectMeta:
+    from cairn.server import runtime
+    current_runtime = runtime.load(conn, row["id"])
     metadata = audit_metadata(conn, row["id"]) if row["mode"] == "audit" else None
     reason = project_reason_from_row(row)
     if reason and metadata and "reason" in metadata.leases:
@@ -286,6 +291,7 @@ def project_meta_from_row(row: sqlite3.Row, conn: sqlite3.Connection) -> Project
         reason=reason,
         mode=row["mode"],
         audit=metadata,
+        runtime_generation=current_runtime["generation"] if current_runtime else None,
     )
 
 

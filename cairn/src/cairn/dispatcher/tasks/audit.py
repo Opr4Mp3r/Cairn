@@ -47,10 +47,14 @@ def research_receipt(backend, workspace: str, project: ProjectDetail, worker, *,
                      intent_id: str | None = None) -> None:
     if project.project.mode != "audit":
         return
-    path = str(Path(workspace) / "research" / f"{phase}-{uuid.uuid4().hex}.json")
+    folder = Path(workspace) / "research"
+    if project.project.runtime_generation is not None:
+        folder /= f"generation-{project.project.runtime_generation:03d}"
+    path = str(folder / f"{phase}-{uuid.uuid4().hex}.json")
     backend.write_text_file(workspace, path, json.dumps({
         "project_id": project.project.id, "worker": worker.name, "harness": worker.type, "phase": phase,
         "role": phase.split("_", 1)[0], "intent_id": intent_id,
+        "generation": project.project.runtime_generation,
         "session": session, "prompt": prompt, "process": asdict(process),
         "note": "Raw execution receipt; exit code alone does not validate an audit claim.",
     }, ensure_ascii=False, indent=2))

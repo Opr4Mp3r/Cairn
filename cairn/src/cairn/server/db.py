@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS service_identity (
     database_id TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS project_runtime (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    data_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_submissions (
     id TEXT PRIMARY KEY,
     run_dir TEXT NOT NULL UNIQUE,
@@ -170,6 +175,8 @@ def get_conn() -> Generator[sqlite3.Connection, None, None]:
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
+        from cairn.server.runtime import check_request
+        check_request(conn)
         conn.commit()
     except Exception:
         conn.rollback()

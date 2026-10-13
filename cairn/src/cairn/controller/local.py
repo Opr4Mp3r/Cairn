@@ -25,12 +25,32 @@ AGENT_SHUTDOWN_SECONDS = 5
 FORCE_REAP_SECONDS = 2
 
 
-def _owned_agent_groups(registry: Path, owners: set[int]) -> set[int]:
+def stop_legacy_agents(folder: Path) -> None:
+    """Old launchers lack service identities: require their parents to be gone."""
+    parents = set()
+    for name in ("launch.json", "research.json"):
+        path = folder / name
+        if not path.exists():
+            continue
+        record = json.loads(path.read_text())
+        if isinstance(record.get("supervisor_pid"), int):
+            parents.add(record["supervisor_pid"])
+        parents.update(value["pid"] for value in record.get("processes", {}).values() if isinstance(value.get("pid"), int))
+    registry = folder / "agent-processes"
+    for path in registry.glob("*.json"):
+        parents.add(json.loads(path.read_text())["parent_pid"])
+    if process_identities(list(parents)):
+        raise ValueError("Legacy run processes may still be alive; stop the original run manually before Cairn up")
+    stop_agent_groups(registry, parents)
+
+
+def _owned_agent_groups(registry: Path, owners: set[int], workspaces=None) -> set[int]:
     records = {}
     for path in registry.glob("*.json"):
         record = json.loads(path.read_text(encoding="utf-8"))
         pid = record.get("pid")
-        if isinstance(pid, int) and pid > 0 and record.get("parent_pid") in owners:
+        if (isinstance(pid, int) and pid > 0 and record.get("parent_pid") in owners
+                and (workspaces is None or record.get("cwd") in workspaces)):
             records[pid] = record
     identities = process_identities(list(records))
     groups = set()
@@ -46,11 +66,11 @@ def _owned_agent_groups(registry: Path, owners: set[int]) -> set[int]:
     return groups
 
 
-def stop_agent_groups(registry: Path, owners: set[int]) -> None:
+def stop_agent_groups(registry: Path, owners: set[int], workspaces=None) -> None:
     signalled = set()
     deadline = time.monotonic() + AGENT_SHUTDOWN_SECONDS
     while True:
-        groups = _owned_agent_groups(registry, owners)
+        groups = _owned_agent_groups(registry, owners, workspaces)
         for pid in groups - signalled:
             try:
                 os.killpg(pid, signal.SIGTERM)
@@ -62,13 +82,13 @@ def stop_agent_groups(registry: Path, owners: set[int]) -> None:
         if time.monotonic() >= deadline:
             break
         time.sleep(0.05)
-    for pid in _owned_agent_groups(registry, owners):
+    for pid in _owned_agent_groups(registry, owners, workspaces):
         try:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
     deadline = time.monotonic() + FORCE_REAP_SECONDS
-    while _owned_agent_groups(registry, owners):
+    while _owned_agent_groups(registry, owners, workspaces):
         if time.monotonic() >= deadline:
             raise RuntimeError("owned Agent groups did not exit within the cleanup deadline")
         time.sleep(0.05)

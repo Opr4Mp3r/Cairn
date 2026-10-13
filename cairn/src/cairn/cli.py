@@ -29,11 +29,12 @@ def up(config_path: Path, db_path: Path):
     from urllib.parse import urlparse
     import yaml
 
-    from cairn.controller.local import stop_agent_groups
+    from cairn.controller.local import stop_agent_groups, stop_legacy_agents
     from cairn.controller.service import ManagedService
     from cairn.controller.submissions import execution_snapshot, validate_server_url
     from cairn.dispatcher.config import DispatchConfig
-    from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV
+    from cairn.dispatcher.runtime.owned_process import REGISTRY_ENV, process_identities
+    from cairn.controller.kritt_query import write_json
 
     configure_logging("INFO")
     service = None
@@ -64,10 +65,20 @@ def up(config_path: Path, db_path: Path):
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError as exc:
                     raise ValueError("This database already has a managed Cairn instance") from exc
+                stop_legacy_agents(db_path.parent)
                 effective.write_text(yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True))
                 db.configure(db_path)
                 os.environ[REGISTRY_ENV] = str(registry)
+                old_owners = set()
+                if registry.exists():
+                    for record_path in registry.glob("*.json"):
+                        old_owners.add(json.loads(record_path.read_text())["parent_pid"])
+                stop_agent_groups(registry, old_owners)
                 service = ManagedService(config, effective, directory)
+                write_json(directory / "service-process.json", {"pid": os.getpid(),
+                    "identity": process_identities([os.getpid()])[os.getpid()],
+                    "database_id": service.database_id, "service_id": service.service_id,
+                    "database": str(db_path), "server": config.server})
                 from cairn.server.app import app
                 app.state.managed_service = service
                 click.echo(json.dumps({"server": config.server, "database_id": service.database_id,
@@ -109,6 +120,40 @@ def submit(server, run_dir, config_path, wait):
     click.echo(json.dumps(result, ensure_ascii=False))
     if result["status"] in ("error", "interrupted", "deleted"):
         raise click.ClickException(result.get("error") or result["status"])
+
+
+def _task_control(action, server, project_id, run_dir, remaining_seconds=None):
+    from cairn.controller.submissions import control_prepared
+    import requests
+    if bool(project_id) == bool(run_dir):
+        raise click.ClickException("Provide exactly one of --project or --run-dir")
+    try:
+        result = control_prepared(server, action, project_id=project_id, run_dir=run_dir,
+                                  remaining_seconds=remaining_seconds)
+    except requests.RequestException as exc:
+        raise click.ClickException("Cairn is unavailable; start/check it manually") from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
+@main.command()
+@click.option("--server", required=True)
+@click.option("--project", "project_id")
+@click.option("--run-dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--remaining-seconds", type=click.FloatRange(min=0), help="One-time legacy remaining balance")
+def resume(server, project_id, run_dir, remaining_seconds):
+    """恢复在线服务中的原任务；不启动系统服务。"""
+    _task_control("resume", server, project_id, run_dir, remaining_seconds)
+
+
+@main.command()
+@click.option("--server", required=True)
+@click.option("--project", "project_id")
+@click.option("--run-dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def pause(server, project_id, run_dir):
+    """暂停任务并冻结剩余预算，系统服务继续运行。"""
+    _task_control("pause", server, project_id, run_dir)
 
 
 @main.command()

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import timedelta
 
 from fastapi import HTTPException
 
 from cairn.audit_evidence import json_digest
-from cairn.server import services
+from cairn.server import services, runtime
 from cairn.server.models import AuditLease, ClosingResult
 
 
@@ -53,24 +52,25 @@ def advance_budget(conn, project_id: str, *, finalize: bool = False):
         raise HTTPException(404, "Project is not an audit")
     if row["status"] not in ("active", "draining") or not metadata.started_at:
         return metadata
-    now = services.utcnow()
+    clock = runtime.BudgetClock(conn, metadata)
+    now = clock.now
     closing = metadata.closing
     if closing.status == "success" and not closing_current(metadata):
         closing.status = "stale"
         closing.error = "有效知识已变化，旧 closing 不适用于当前快照"
-    if closing.token and closing.attempt_deadline and now >= closing.attempt_deadline and closing.status != "success":
+    if closing.token and clock.deadline(closing, "attempt_deadline") is not None and clock.due(closing, "attempt_deadline") and closing.status != "success":
         closing.status = "error"
         closing.error = "结案调用或回执超过本次期限，未产生有效结果"
         closing.token = None
-    if row["status"] == "active" and now >= metadata.research_deadline:
+    if row["status"] == "active" and now >= clock.research_end:
         metadata.draining_lease_ids = sorted(live_leases(conn, project_id))
         metadata.phase = "draining"
         conn.execute("UPDATE projects SET status='draining' WHERE id=?", (project_id,))
-    if metadata.phase == "draining" and (now >= metadata.drain_deadline or not live_leases(conn, project_id)):
+    if metadata.phase == "draining" and (now >= clock.drain_end or not live_leases(conn, project_id)):
         conn.execute("UPDATE intents SET worker=NULL WHERE project_id=? AND to_fact_id IS NULL", (project_id,))
         services.clear_project_reason(conn, project_id)
         metadata.phase = "finalizing"
-    if now >= metadata.final_deadline:
+    if now >= clock.final_end:
         metadata.phase = "closed"
         metadata.termination_reason = "final_deadline"
         conn.execute("UPDATE projects SET status='budget_exhausted' WHERE id=?", (project_id,))
@@ -88,6 +88,8 @@ def advance_budget(conn, project_id: str, *, finalize: bool = False):
             metadata.termination_reason = "research_budget_exhausted"
             conn.execute("UPDATE projects SET status='budget_exhausted' WHERE id=?", (project_id,))
     services.save_audit_metadata(conn, metadata)
+    if metadata.phase == "closed":
+        runtime.freeze(conn, project_id, "finished", metadata.termination_reason)
     return metadata
 
 
@@ -97,8 +99,10 @@ def new_research(conn, project_id: str) -> None:
         services.check_project_active(conn, project_id)
         return
     metadata = services.audit_metadata(conn, project_id)
+    runtime.require_running(conn, project_id)
+    clock = runtime.BudgetClock(conn, metadata)
     if (row["status"] != "active" or metadata.phase != "researching"
-            or not metadata.research_deadline or services.utcnow() >= metadata.research_deadline):
+            or clock.research_end is None or clock.now >= clock.research_end):
         raise HTTPException(403, "Audit no longer accepts new research")
 
 
@@ -118,9 +122,11 @@ def existing_research(conn, project_id: str, scope: str, worker: str, lease_id: 
         services.check_project_active(conn, project_id)
         return
     metadata = services.audit_metadata(conn, project_id)
-    now = services.utcnow()
+    runtime.require_running(conn, project_id)
+    clock = runtime.BudgetClock(conn, metadata)
+    now = clock.now
     lease = metadata.leases.get(scope)
-    if row["status"] not in ("active", "draining") or metadata.phase == "finalizing" or now >= metadata.drain_deadline:
+    if row["status"] not in ("active", "draining") or metadata.phase == "finalizing" or now >= clock.drain_end:
         raise HTTPException(403, "Audit research writeback window is closed")
     if scope == "reason":
         services.expire_reason_leases(conn, project_id)
@@ -131,7 +137,7 @@ def existing_research(conn, project_id: str, scope: str, worker: str, lease_id: 
     if holder != worker or (lease_id is not None and (lease is None or lease.id != lease_id)):
         raise HTTPException(409, "Research lease is no longer held by this attempt")
     # ponytail: retain pre-CP5 callers during research; draining always requires the frozen credential.
-    if now >= metadata.research_deadline or row["status"] == "draining":
+    if now >= clock.research_end or row["status"] == "draining":
         metadata = advance_budget(conn, project_id)
         if lease is None or lease_id != lease.id or lease.id not in metadata.draining_lease_ids or metadata.phase != "draining":
             raise HTTPException(409, "Only admitted in-flight leases may finish during draining")
@@ -139,31 +145,31 @@ def existing_research(conn, project_id: str, scope: str, worker: str, lease_id: 
 
 def control_window(conn, metadata) -> None:
     row = services.get_project_or_404(conn, metadata.project_id)
-    if row["status"] not in ("active", "draining") or not metadata.final_deadline or services.utcnow() >= metadata.final_deadline:
+    runtime.require_running(conn, metadata.project_id)
+    clock = runtime.BudgetClock(conn, metadata)
+    if row["status"] not in ("active", "draining") or clock.final_end is None or clock.now >= clock.final_end:
         raise HTTPException(409, "Audit control window is closed")
 
 
 def claim_closing(conn, metadata, body):
-    from cairn.server.audit_review import _datetime, _timestamp
-
     metadata = advance_budget(conn, metadata.project_id)
     control_window(conn, metadata)
     if metadata.phase != "finalizing" or not facts_reviewed(conn, metadata):
         raise HTTPException(409, "Final source observations must be reviewed before closing")
     closing = metadata.closing
-    now = services.utcnow()
+    clock = runtime.BudgetClock(conn, metadata)
+    now = clock.now
     if closing.status == "success":
         return closing
-    if closing.token and closing.attempt_deadline and now < closing.attempt_deadline:
+    if closing.token and clock.deadline(closing, "attempt_deadline") is not None and now < clock.deadline(closing, "attempt_deadline"):
         raise HTTPException(409, "Closing attempt is still running")
-    if closing.round_deadline is None:
+    if clock.deadline(closing, "round_deadline") is None:
         closing.max_attempts = body.max_attempts
         try:
-            closing.round_deadline = _timestamp(min(_datetime(now) + timedelta(seconds=body.timeout_seconds * body.max_attempts),
-                                                    _datetime(metadata.final_deadline)))
+            clock.set_deadline(closing, "round_deadline", min(now + body.timeout_seconds * body.max_attempts, clock.final_end))
         except OverflowError as exc:
             raise HTTPException(422, "Closing time budget is out of range") from exc
-    if closing.attempts >= closing.max_attempts or now >= closing.round_deadline:
+    if closing.attempts >= closing.max_attempts or clock.due(closing, "round_deadline"):
         raise HTTPException(409, "Closing attempts exhausted")
     closing.status = "running"
     closing.attempts += 1
@@ -171,8 +177,7 @@ def claim_closing(conn, metadata, body):
     closing.input_digest = closing_input(metadata)
     closing.result = None
     closing.session = closing.request_id = closing.error = None
-    closing.attempt_deadline = _timestamp(min(_datetime(now) + timedelta(seconds=body.timeout_seconds),
-                                             _datetime(closing.round_deadline)))
+    clock.set_deadline(closing, "attempt_deadline", min(now + body.timeout_seconds, clock.deadline(closing, "round_deadline")))
     services.save_audit_metadata(conn, metadata)
     return closing
 
@@ -191,7 +196,7 @@ def finish_closing(conn, metadata, body):
             or body.input_digest != closing.input_digest or body.record.input_digest != closing.input_digest):
         raise HTTPException(409, "Closing receipt does not own this snapshot")
     success = body.record.attempt_status == "success"
-    if success and (services.utcnow() >= closing.attempt_deadline or closing_input(metadata) != closing.input_digest):
+    if success and (runtime.BudgetClock(conn, metadata).due(closing, "attempt_deadline") or closing_input(metadata) != closing.input_digest):
         raise HTTPException(409, "Closing snapshot or attempt deadline changed")
     if success and not body.record.session:
         raise HTTPException(400, "Closing requires its own session")

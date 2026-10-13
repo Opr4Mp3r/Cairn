@@ -259,7 +259,8 @@ def test_manual_up_and_client_submission_keep_service_alive_with_project_pool(pr
             assert client.get_project(pid).project.mode == "audit"
             assert next(f.description for f in client.get_project(pid).facts if f.id == "goal") != plan["goal"]
             assert client.set_project_status(pid, "stopped").ok
-            wait_until(lambda: client.get_submission(sid)["status"] == "stopped")
+            wait_until(lambda: client.get_submission(sid)["status"] == "paused")
+            assert client.get_runtime(pid)["state"] == "paused"
             assert client.service_health()["service_id"] == health["service_id"]
             assert client.service_health()["ready"] and process.poll() is None
             assert client.get_project(pid).project.status == "stopped"

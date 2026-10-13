@@ -59,7 +59,7 @@ class LocalProcess:
         if registry:
             # 子进程先登记再 exec，即使父进程退出，启动器仍有本次组的回收凭据。
             command = [sys.executable, "-B", str(Path(__file__).with_name("owned_process.py")),
-                       str(os.getpid()), registry, *command]
+                       str(os.getpid()), registry, str(self._term_grace), *command]
         self._process = subprocess.Popen(
             command,
             cwd=self._cwd,

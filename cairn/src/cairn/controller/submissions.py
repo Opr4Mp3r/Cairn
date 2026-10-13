@@ -119,6 +119,44 @@ def validate_server_url(server: str) -> None:
         raise ValueError("use the fixed loopback address of an already running Cairn service")
 
 
+def control_prepared(server, action, *, project_id=None, run_dir=None, remaining_seconds=None):
+    validate_server_url(server)
+    locator = None
+    if run_dir is not None:
+        folder = Path(run_dir).expanduser().resolve(strict=True)
+        path = folder / "submission.json"
+        locator = json.loads((path if path.exists() else folder / "project.json").read_text())
+        project_id = locator.get("project_id")
+    with closing(CairnClient(server, trust_env=False)) as client:
+        health = client.service_health()
+        if not health.get("managed") or not health.get("ready"):
+            raise ValueError("Start/check Cairn manually before task control")
+        if locator and locator.get("database_id", health["database_id"]) != health["database_id"]:
+            raise ValueError("This run belongs to another Cairn database")
+        if locator and locator.get("submission_id"):
+            if locator.get("database_id") != health["database_id"]:
+                raise ValueError("Saved submission must identify this Cairn database")
+            current = client.get_submission(locator["submission_id"])
+            if (current["submission_id"] != locator["submission_id"] or Path(current["run_dir"]).resolve() != folder
+                    or any(current[key] != health[key] for key in ("database_id", "service_id"))):
+                raise ValueError("Original submission identity changed; saved locator was preserved")
+            project_id = current.get("project_id")
+            if not project_id:
+                raise ValueError(f"Submission {current['status']} has no project to {action}")
+            write_json(folder / "submission.json", current)
+        if not project_id:
+            raise ValueError("A registered project or submitted run is required")
+        if run_dir is not None and Path(client.get_runtime(project_id)["run_dir"]).resolve() != folder:
+            raise ValueError("This run belongs to another Cairn project/database")
+        body = {"database_id": health["database_id"], "service_id": health["service_id"]}
+        if remaining_seconds is not None:
+            body["remaining_seconds"] = remaining_seconds
+        result = client.control_runtime(project_id, action, body)
+        if not result.ok:
+            raise ValueError(f"task {action} failed ({result.status_code}): {result.text}")
+        return result.data
+
+
 def submit_prepared(server: str, run_dir: Path, *, config_path: Path | None = None,
                     wait: bool = True, report=lambda event: None) -> dict:
     validate_server_url(server)

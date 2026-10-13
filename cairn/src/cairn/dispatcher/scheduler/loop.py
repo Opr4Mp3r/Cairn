@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 import shutil
 import subprocess
 import time
+import threading
+from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +74,7 @@ class DispatcherLoop:
         self._task_cancellations: set[TaskCancellation] = set()
         self._stopping = False
         self.on_failure = None
+        self._dispatch_lock = threading.RLock()
 
     def _new_cancellation(self) -> TaskCancellation:
         cancellation = TaskCancellation()
@@ -78,6 +82,29 @@ class DispatcherLoop:
         if getattr(self, "_stopping", False):
             cancellation.cancel("dispatcher shutting down")
         return cancellation
+
+    def cancel_project_tasks(self, project_id, reason):
+        from concurrent.futures import wait
+        with getattr(self, "_dispatch_lock", nullcontext()):
+            tasks = [(future, task) for future, task in list(self.futures.items()) if task.project_id == project_id]
+        if tasks:
+            with ThreadPoolExecutor(max_workers=len(tasks)) as cleanup:
+                list(cleanup.map(lambda item: item[1].cancellation.cancel(reason), tasks))
+            _, pending = wait([future for future, _ in tasks], timeout=20)
+            if pending:
+                raise RuntimeError("Project calls did not stop before the cleanup deadline")
+
+    def _execution_client(self, project):
+        if getattr(self, "managed", False) and project.project.runtime_generation is not None:
+            return self.client.for_generation(project.project.runtime_generation)
+        return self.client
+
+    @staticmethod
+    def _owned_task(function, config, client, backend, *args):
+        try:
+            return function(config, client, backend, *args)
+        finally:
+            client.close()
 
     def cancel_running_tasks(self, reason: str) -> None:
         self._stopping = True
@@ -120,7 +147,8 @@ class DispatcherLoop:
                     self._refresh_runtime_projects(summaries)
                     self._cancel_inactive_tasks(summaries)
                     self._queue_container_cleanups(summaries)
-                    self._dispatch_available(summaries)
+                    with self._dispatch_lock:
+                        self._dispatch_available(summaries)
                 except requests.RequestException as exc:
                     if once:
                         raise
@@ -451,7 +479,8 @@ class DispatcherLoop:
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:reason")
-        claim = self.client.claim_reason(project.project.id, worker.name, trigger)
+        execution_client = self._execution_client(project)
+        claim = execution_client.claim_reason(project.project.id, worker.name, trigger)
         if claim.status_code in (403, 409):
             level = logging.INFO if claim.status_code == 403 else logging.WARNING
             LOG.log(
@@ -461,6 +490,8 @@ class DispatcherLoop:
                 worker.name,
                 claim.status_code,
             )
+            if execution_client is not self.client:
+                execution_client.close()
             return False
         if not claim.ok:
             LOG.warning(
@@ -469,14 +500,17 @@ class DispatcherLoop:
                 worker.name,
                 claim.status_code,
             )
+            if execution_client is not self.client:
+                execution_client.close()
             return False
         if project.project.mode == "audit" and isinstance(claim.data, dict):
             project.project.reason = ProjectMeta.model_validate(claim.data).reason
         try:
+            function = partial(self._owned_task, run_reason_task) if execution_client is not self.client else run_reason_task
             future = self._task_executor(project.project.id).submit(
-                run_reason_task,
+                function,
                 self._task_config(project.project.id),
-                self.client,
+                execution_client,
                 self.container_manager,
                 project,
                 export_yaml,
@@ -485,6 +519,8 @@ class DispatcherLoop:
             )
         except Exception:
             LOG.exception("failed to submit reason task project=%s worker=%s", project.project.id, worker.name)
+            if execution_client is not self.client:
+                execution_client.close()
             self._best_effort_release_reason(project.project.id, worker.name)
             return False
         self.futures[future] = RunningTask(
@@ -497,6 +533,7 @@ class DispatcherLoop:
             hint_count=len(project.hints),
             open_intent_count=self._project_open_intent_count(project),
             reason_revision=project.project.audit.reason_revision if project.project.audit else None,
+            runtime_generation=project.project.runtime_generation,
         )
         self.runtime_project_ids.add(project.project.id)
         self._clear_project_log_state(project.project.id)
@@ -579,7 +616,8 @@ class DispatcherLoop:
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:explore")
-        claim = self.client.heartbeat(project.project.id, intent.id, worker.name)
+        execution_client = self._execution_client(project)
+        claim = execution_client.heartbeat(project.project.id, intent.id, worker.name)
         if claim.status_code in (403, 409):
             level = logging.INFO if claim.status_code == 403 else logging.WARNING
             LOG.log(
@@ -590,6 +628,8 @@ class DispatcherLoop:
                 worker.name,
                 claim.status_code,
             )
+            if execution_client is not self.client:
+                execution_client.close()
             return False
         if not claim.ok:
             LOG.warning(
@@ -599,14 +639,17 @@ class DispatcherLoop:
                 worker.name,
                 claim.status_code,
             )
+            if execution_client is not self.client:
+                execution_client.close()
             return False
         if project.project.mode == "audit" and isinstance(claim.data, dict):
             intent.lease_id = claim.data.get("lease_id")
         try:
+            function = partial(self._owned_task, run_explore_task) if execution_client is not self.client else run_explore_task
             future = self._task_executor(project.project.id).submit(
-                run_explore_task,
+                function,
                 self._task_config(project.project.id),
-                self.client,
+                execution_client,
                 self.container_manager,
                 project,
                 export_yaml,
@@ -616,9 +659,11 @@ class DispatcherLoop:
             )
         except Exception:
             LOG.exception("failed to submit explore task project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+            if execution_client is not self.client:
+                execution_client.close()
             self._best_effort_release(project.project.id, intent.id, worker.name)
             return False
-        self.futures[future] = RunningTask(project.project.id, "explore", worker.name, cancellation, intent_id=intent.id)
+        self.futures[future] = RunningTask(project.project.id, "explore", worker.name, cancellation, intent_id=intent.id, runtime_generation=project.project.runtime_generation)
         self.runtime_project_ids.add(project.project.id)
         self._clear_project_log_state(project.project.id)
         LOG.info("dispatched explore project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
@@ -864,6 +909,10 @@ class DispatcherLoop:
                 else:
                     self.worker_rejected_until.pop(rejection_key, None)
                 if outcome == "success" and task.task_type == "reason":
+                    if task.runtime_generation is not None:
+                        current = self.client.get_project(task.project_id)
+                        if current.project.runtime_generation != task.runtime_generation:
+                            continue
                     assert task.fact_count is not None
                     assert task.hint_count is not None
                     assert task.open_intent_count is not None
@@ -975,13 +1024,22 @@ class DispatcherLoop:
             if not response.ok:
                 raise RuntimeError(f"audit budget update failed project={summary.id}: {response.status_code} {response.text}")
             project = ProjectMeta.model_validate(response.data)
-            summaries[index] = summary.model_copy(update={"status": project.status, "audit": project.audit})
+            summaries[index] = summary.model_copy(update={"status": project.status, "audit": project.audit,
+                                                         "runtime_generation": project.runtime_generation})
         return summaries
 
     def _initialize_reason_checkpoints(self, summaries: list[ProjectSummary]) -> None:
         for summary in summaries:
             if summary.status != "active":
                 continue
+            generation = summary.runtime_generation
+            seen = self.__dict__.setdefault("reason_generations", {})
+            if generation is not None and seen.get(summary.id) != generation:
+                seen[summary.id] = generation
+                if generation > 1:
+                    self.reason_checkpoints.pop(summary.id, None)
+            if generation is not None and generation > 1 and summary.id not in self.reason_checkpoints:
+                continue  # Recover with one necessary Reason, never assume this graph was consumed.
             if summary.id in self.reason_checkpoints:
                 continue
             open_intent_count = summary.working_intent_count + summary.unclaimed_intent_count

@@ -101,7 +101,7 @@ def accept(service, body: SubmissionRequest, *, submission_id=None):
 def claim_next():
     with get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT * FROM audit_submissions WHERE status='pending' ORDER BY created_at,rowid LIMIT 1").fetchone()
+        row = conn.execute("SELECT * FROM audit_submissions WHERE status IN ('pending','resuming') ORDER BY created_at,rowid LIMIT 1").fetchone()
         if row is None:
             return None
         token = secrets.token_hex(32)
@@ -112,7 +112,7 @@ def claim_next():
 
 def finish(submission_id, status, *, issues=(), error=None):
     with get_conn() as conn:
-        conn.execute("UPDATE audit_submissions SET status=?,issues_json=?,error=?,updated_at=? WHERE id=? AND status NOT IN ('deleted','error','interrupted')",
+        conn.execute("UPDATE audit_submissions SET status=?,issues_json=?,error=?,updated_at=? WHERE id=? AND status NOT IN ('deleted','error','interrupted','paused','pausing')",
                      (status, json.dumps(list(issues)), error, utcnow(), submission_id))
 
 
@@ -121,3 +121,37 @@ def creation_owner(conn, token):
     if row is None:
         raise HTTPException(403, "Managed audits must pass the submission preparation flow")
     return row
+
+
+def adopt_legacy(conn, service, metadata):
+    """Attach an old native run in this database directory without rebuilding its graph."""
+    from cairn.server import db
+    from cairn.dispatcher.config import DispatchConfig, ControllerBudgetConfig
+    from cairn.controller.submissions import execution_snapshot
+
+    folder = db._db_path.parent
+    try:
+        locator = json.loads((folder / "project.json").read_text())
+        if locator.get("project_id") != metadata.project_id:
+            raise ValueError("Legacy project locator does not match this database")
+        prepared, plan, artifacts = read_prepared(folder)
+        baseline = json.loads(artifacts["source_baseline"])
+        if Path(prepared["source_root"]).resolve() != Path(metadata.repo_path) or baseline != metadata.baseline:
+            raise ValueError("Legacy inputs do not match the original source baseline")
+        config = DispatchConfig.load(folder / "config.yaml")
+        if Path(config.local.workspace_root).resolve() != Path(metadata.workspace_root):
+            raise ValueError("Legacy workspace configuration does not match this project")
+        config.server = service.config.server
+        config.controller.budget = ControllerBudgetConfig.model_validate(metadata.budget.model_dump())
+        # Revalidate the original configuration, retaining its harness pools.
+        config = DispatchConfig.model_validate(config.model_dump())
+        snapshot = execution_snapshot(config)
+        key = uuid.uuid4().hex
+        saved = save_snapshot(service.directory / "submissions" / key / "legacy", prepared, artifacts, snapshot)
+        now = utcnow()
+        conn.execute("INSERT INTO audit_submissions (id,run_dir,revision,fingerprint,status,prepared_json,execution_json,project_id,created_at,updated_at) VALUES (?,?,1,?,'interrupted',?,?,?,?,?)",
+                     (key, str(folder), snapshot_fingerprint(plan, snapshot, artifacts), json.dumps(saved),
+                      config.model_dump_json(), metadata.project_id, now, now))
+        return get_row(conn, key)
+    except (OSError, ValueError, KeyError, AttributeError) as exc:
+        raise HTTPException(409, f"Legacy run cannot be recovered from its original inputs: {exc}") from exc

@@ -16,6 +16,7 @@ class RunningTask:
     hint_count: int | None = None
     open_intent_count: int | None = None
     reason_revision: int | None = None
+    runtime_generation: int | None = None
 
 
 @dataclass(slots=True)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Request
 
 from cairn.server.db import get_conn
 from cairn.server.audit_budget import existing_research, register_lease, new_research
@@ -166,7 +166,20 @@ def update_project_title(project_id: str, body: UpdateProjectTitleRequest):
 
 
 @router.put("/projects/{project_id}/status", response_model=ProjectMeta)
-def update_project_status(project_id: str, body: UpdateProjectStatusRequest):
+def update_project_status(project_id: str, body: UpdateProjectStatusRequest, request: Request):
+    from cairn.server import runtime
+    with get_conn() as conn:
+        clock = runtime.load(conn, project_id)
+    service = getattr(request.app.state, "managed_service", None)
+    if clock is not None:
+        if service is None or not service.health()["ready"]:
+            raise HTTPException(503, "Start managed Cairn manually before task control")
+        if body.status == "stopped":
+            service.pause(project_id, expected_generation=request.headers.get("X-Cairn-Generation"))
+        else:
+            service.resume(project_id, expected_generation=request.headers.get("X-Cairn-Generation"))
+        with get_conn() as conn:
+            return project_meta_from_row(get_project_or_404(conn, project_id), conn)
     with get_conn() as conn:
         if get_project_or_404(conn, project_id)["mode"] == "audit":
             conn.execute("BEGIN IMMEDIATE")

@@ -85,6 +85,8 @@ class AuditClosing(BaseModel):
     max_attempts: int = 2
     round_deadline: str | None = None
     attempt_deadline: str | None = None
+    round_deadline_seconds: float | None = None
+    attempt_deadline_seconds: float | None = None
     token: str | None = None
     session: str | None = None
     result: ClosingResult | None = None
@@ -188,13 +190,17 @@ class ProjectMeta(BaseModel):
     reason: ProjectReason | None = None
     mode: Literal["generic", "audit"] = "generic"
     audit: AuditMetadata | None = None
+    runtime_generation: int | None = None
 
     @model_serializer(mode="wrap")
     def serialize(self, handler):
         data = handler(self)
+        if self.runtime_generation is None:
+            data.pop("runtime_generation", None)
         if self.mode == "generic":
             data.pop("mode", None)
             data.pop("audit", None)
+            data.pop("runtime_generation", None)
         return data
 
 
@@ -562,6 +568,8 @@ class AuditCompletion(BaseModel):
     max_attempts: int = 2
     round_deadline: str | None = None
     attempt_deadline: str | None = None
+    round_deadline_seconds: float | None = None
+    attempt_deadline_seconds: float | None = None
     review_token: str | None = None
     review_owner: str | None = None
     review_session: str | None = None

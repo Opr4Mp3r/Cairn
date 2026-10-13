@@ -62,6 +62,24 @@ class CairnClient:
         response.raise_for_status()
         return response.json()
 
+    def get_runtime(self, project_id: str) -> dict:
+        response = self._session().get(self._url(f"/projects/{project_id}/runtime"), timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def control_runtime(self, project_id: str, action: str, body: dict) -> ApiResult:
+        return self._request_json("POST", f"/projects/{project_id}/runtime/{action}", body)
+
+    def for_generation(self, generation: int):
+        return CairnClient(self._base_url, self._timeout, trust_env=self._trust_env,
+                           headers={**self._headers, "X-Cairn-Generation": str(generation)})
+
+    def set_generation(self, generation: int):
+        self._headers["X-Cairn-Generation"] = str(generation)
+        with self._sessions_lock:
+            for session in self._sessions.values():
+                session.headers["X-Cairn-Generation"] = str(generation)
+
     def submit_audit(self, body: dict) -> ApiResult:
         return self._request_json("POST", "/audit-submissions", body)
 
