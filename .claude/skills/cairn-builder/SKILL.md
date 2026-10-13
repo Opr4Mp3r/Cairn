@@ -1,77 +1,103 @@
 ---
 name: cairn-builder
-description: 在 Claude Code 原生会话中完成 Cairn 审计开题：主动配置角色资源池、补充需求、只读查询 Kritt、阅读源码并生成 AuditPlan。Builder 只使用已启动的系统，Kritt/Cairn 服务必须由用户手动启动。用于配置资源池、根据扫描开题、修订方案和查看任务；纯客户端提交功能未交付前只准备并交付方案。
+description: 在 Claude Code 原生会话中管理 Cairn 的本地源码审查任务：配置角色资源池、只读查询 Kritt、阅读源码、生成和修订 AuditPlan，向已在线服务提交任务，查看进度、暂停和恢复原任务、追溯结果。适用于已授权本地源码的静态审查与风险证据核对。Kritt/Cairn 系统服务始终由用户手动启停。
 ---
 
-# Cairn 原生开题
+# Cairn 原生审查与任务控制
 
-在当前会话完成资源池配置、问答、取材和方案修订。Kritt/Cairn 服务的启动、关闭、重启由用户在终端手动执行；Builder 不执行 Docker 启停、Cairn 服务启动器或后台守护命令，连接失败也不自动拉起另一套服务。
-服务在线后允许 Builder 提交并开始研究任务，这与启动系统服务不同；调用前确认当前版本确实提供纯客户端入口。当前 `cairn start` 会启动后台服务，禁止 Builder 执行它，按第 5 步交付方案。
-直接使用已有 Read、Bash、Write/Edit 工具，不用 ToolSearch 寻找这些内置工具，不创建 MCP 或嵌套 Builder Agent。
+直接使用当前会话的 Read、Bash、Write/Edit；不创建 MCP、嵌套 Builder 或另一套调度器。服务运行后可以提交并开始任务；服务的启动、关闭、重启由用户在终端执行。连接失败只说明人工启动方式，不执行 Docker 启停、`cairn up/serve/dispatch/start/builder/audit`、后台守护或换端口启动服务。
 
-## 1. 主动询问并配置资源池
+本 Skill 负责已授权本地源码的静态审查、风险证据核对和修复研究；不构造或执行利用链。保留用户条件与未知，研究判断由现有独立审核流程处理。
 
-先读取用户指定的配置文件，未指定时使用仓库的 `dispatch.builder.yaml`；不存在时从 `dispatch.builder.example.yaml` 创建。已有文件只调整 `role_pools`，保留目标源码、Kritt、预算、超时和其他设置。
-展示当前各角色的 harness 与数量；用户尚未明确本次选择时，即使已有配置，也要主动问一次：“本次沿用这些资源池，还是调整？Explore 要用哪些 harness、各几个？其余角色可沿用当前设置。”用户已经给出配置、说“沿用”或“其他保持默认”时，直接按答复执行，不重复确认。
-没有资源池时，提出七个角色各 `claudecode: 1` 的初始方案供用户选择；用户只调整 Explore 时，明确其余角色拟沿用的配置或默认值，补问尚未决定的部分。未答复的选择保持待定，不自行增加并发或启动研究。
-按用户的自然语言答复直接写入完整 `role_pools`，不要只给 YAML 让用户自己编辑。使用 `explore`、`reason`、`preflight`、`seed_review`、`overseer`、`closing`、`final_review` 七个角色；每个角色填写已支持的 harness 名和正整数数量，例如 `explore: {claudecode: 3, grok: 2}`。移除某 harness 时删除该项，不写数量 0；每个角色至少保留一种。
-角色容量直接等于数量之和，3 个 Claude Code 加 2 个 Grok 就是 5；不增加 `max_concurrency` 或另一套总量字段。内部 Worker 与容量自动生成，无需另写 `workers`、`controller.roles`、`runtime.max_workers` 或 `runtime.max_project_workers`。
-模型/provider、登录与代理沿用用户的本机 CLI 和环境；不改 CCSwitch 或全局 harness 配置，也不从旧 `common_env` 注入模型。原生 Builder 保持当前会话，不占后台名额。
-保存后用项目的 Python 调用 `DispatchConfig.load` 检查配置能否加载；仅展示资源池及各角色合计，不输出整份配置或凭据。说明 Reason、Preflight、Closing、Final Review 每项目仍串行，名额不代表强制重复执行同一决策。
-`prepare` 使用刚保存的配置路径，交付时说明该路径与本次资源池。修改本地 YAML 不代表在线服务已经热加载；纯提交功能交付后，须把本次配置快照随任务提交。待运行目录创建后，将资源池问答和最终选择追加到 `requirements.json.messages`；同次方案修订不重复询问，除非用户要求调整。
-用户仅要求配置资源池时，交付配置路径和最终分配后结束，不创建或启动研究。已有运行不热更新；配置调整用于下一次启动。
+## 1. 先选择任务路径
 
-## 2. 准备固定输入
+- 新任务或方案修订：按第 2～4 节准备、取材，再提交。用户已有 prepared run/plan 时读取原材料与配置，跳过已完成步骤，不重复 prepare 或新建 run。
+- 已有任务的进度、暂停、恢复或结果：直接按第 5 节定位原任务，不重新 prepare、查询新 Kritt 扫描、生成 plan 或询问新资源池。
+- 只配置资源池或只准备方案：完成所需部分后交付，不自动提交。
 
-从本 Skill 的实际路径定位 `scripts/cairn.py`，后续通过 Bash 调用：
+从本 Skill 实际路径定位 `scripts/cairn.py`，用以下统一命令前缀（下称 `CLIENT`）：
 
 ```sh
-python3 /absolute/path/to/cairn/.claude/skills/cairn-builder/scripts/cairn.py prepare \
-  --config dispatch.builder.yaml --target zentao \
-  --goal '用户原始目标' --run-dir /absolute/path/to/new-run
+python3 /absolute/path/to/cairn/.claude/skills/cairn-builder/scripts/cairn.py
 ```
 
-脚本固定使用仓库的 `cairn/.venv` 和仓库根目录，支持从任何目录调用；先按项目指南完成 `uv sync --project cairn`。
-确认目标配置、用户目标和源码之外的新 run 目录。保留用户已给出的部署、攻击者能力、效果与范围。
-除资源池选择外，仅在缺少会改变范围或阻止开工的信息时提问；未知条件如实记录，不自行降级或替换目标。
-可指定 `--scan-id N`；离线时指定 `--view /absolute/path/to/view.json`，必须是匹配该目标的 Cairn Kritt 视图。
-不要猜 scan、commit、数据库或 DSN；目标不存在、扫描未完成、源码不匹配、连接失败时报告具体阻塞。
-`prepare` 只保存输入并核验源码，不调用模型或启动研究。读取本 run 的 `run.json` 以及返回的 `plan_schema`、`requirements` 路径。
+脚本仅提供 `prepare/submit/status/pause/resume`，固定使用仓库的 `cairn/.venv` 和仓库目录，可从任意目录执行。缺少环境时按指南完成 `uv sync --project cairn`。
 
-## 3. 原生对话与取材
+仅配置资源池或准备方案时不要求 Cairn 在线。提交、控制或在线查询前，优先使用用户给出的服务地址；否则读取指定配置的 `server` 或原 run 的 `research.json.server`。缺少地址或定位时只追问缺失项，不猜数据库、scan、余额或另一个服务。运行 `CLIENT status --server URL`。只有 `health.managed=true` 且 `health.ready=true` 才能提交或控制任务；查看实例和组件故障只能读取，返回 `manual_start` 或已有配置/数据库的人工启动说明。
 
-由当前会话继续问答。将每轮相关问题与答复追加到 `requirements.json` 的 `messages`，使用 `role`、`content`；保留 `user_goal` 原文和已有消息。
-使用 `prepare` 返回的完整 `kritt_query_command`，经 Bash 向其 stdin 传入 JSON；不要另找数据库工具或凭据：
+## 2. 主动配置新任务的资源池
+
+读取用户指定配置；未指定时读取仓库 `dispatch.builder.yaml`，不存在则从 `dispatch.builder.example.yaml` 创建。已有配置只改 `role_pools`，保留目标、Kritt、预算、超时等字段。
+
+展示各角色的 harness 和数量。用户未明确本次选择时主动问一次是否沿用或调整；已经说“沿用”“其余默认”或给出完整选择时不重复确认。无资源池时提出七个角色各 `claudecode: 1`；未决定的名额保持待定，不自行增加并发或提交任务。
+
+按答复直接保存 `explore/reason/preflight/seed_review/overseer/closing/final_review` 七个角色，每项使用已支持的 harness 与正整数数量。移除项就删除，不写 0；每个角色至少一种。角色容量等于各数量之和，不另设总上限，不手写内部 workers。Reason、Preflight、Closing、Final Review 每项目仍串行。
+
+用项目 Python 的 `DispatchConfig.load` 检查能否加载，只展示资源池与合计，不输出整份配置或凭据。模型、provider、登录、代理沿用本机 CLI/CCSwitch，不修改全局设置。当前 Builder 会话不占后台池名额。
+
+prepare 使用刚保存的配置；把资源池问答追加到新 run 的 `requirements.json.messages`。修改 YAML 不代表在线服务热加载；submit 的 `--config` 明确把这份执行快照随任务提交。已有运行沿用原池，本轮不热修改恢复任务的配置。
+
+## 3. 准备固定输入与取材
+
+```sh
+CLIENT prepare --config /path/to/task.yaml --target TARGET \
+  --goal '用户原始审查目标' --run-dir /absolute/path/to/new-run
+```
+
+实际执行时把 `CLIENT` 替换为第 1 节完整前缀。可指定 `--scan-id N`；仅当用户选择离线视图时使用 `--view /path/to/view.json`。目标、scan/commit、源码、manifest、只读连接必须匹配；错误时报告具体阻塞，不自行切版本或刷新材料。run 放在目标源码之外。prepare 不调用模型或启动服务。
+
+读取返回的 `run.json`、`plan_schema`、`requirements` 和资料路径。将需求问答追加到 `requirements.json.messages`，使用 role/content，保留 user_goal 原文。仅追问影响范围或阻止开工的缺失信息。
+
+通过 Bash 使用 prepare 返回的完整 `kritt_query_command`，向 stdin 输入 JSON，不另找数据库凭据或写 Kritt：
 
 ```json
 {"action":"describe"}
-{"action":"search","kind":"flow","path":"module/install/"}
+{"action":"search","kind":"flow","path":"src/"}
 {"action":"get","ref":原始返回的ref对象}
 ```
 
-先了解视图，再按需要查询 `entrypoint`、`flow` 或 `finding`；保留原始 ref，按返回 cursor 翻页。`get` 自动收齐该分支分页。
-使用 Read 阅读查询返回的材料、回执、`references` 中列出的资料和 `source_root` 下的必要源码。
-取材只服务于开题；不修改目标源码、不部署目标、不执行利用实验，不在开题会话中接管研究。
-Kritt 的 rank、canonical、valid、scope 和自报确认只是分析标签，不能直接当作已确认事实。
+按需要查询 entrypoint/flow/finding，保留原始 ref 和分页 cursor；get 自动收齐分支。用 Read 阅读材料、回执、参考资料及必要源码，不拼接完整源码清单。Kritt 的 rank/canonical/valid/scope 是分析标签，不能当作已确认前提。开题不改目标源码、不部署目标或接管后台研究。
 
-## 4. 保存 AuditPlan
+## 4. 保存方案并提交
 
-读取返回的 `plan_schema`，将符合该 schema 的原始 AuditPlan JSON 写入本 run 的 `plan.json`。
-不要使用 `ask`/`finish` action 封装；问答发生在当前会话中。
-`origin` 仅写任务身份、版本、用户要求；代码行为、可达性、部署状态、危害判断均作为待复核 seeds。
-所有种子的 `audit.review_status` 设为 `unverified`，保留条件和未知；无源码引用时 evidence 可为空。
-`audit.evidence` 只写仓库内源码路径和行号；Kritt 材料与回执路径写入 description 或 review_notes。
-seed key 唯一，不用 origin/goal；`premise_ids`、Intent 的 `from` 只引用本次 seed key 或 origin，不引用 goal、不形成循环。
-policy 保留 effect、deployment、attacker_capabilities、scope、cvss、evidence_requirements、threat_model。
-threat_model 每项注明 claim、kind（official/inferred/unknown）、source；官方仓库的代码不自动等于官方威胁模型。
-不将未复核判断写成 policy 的已知前提，不加入“证明不可能”出口，不放宽用户条件；静态任务的 cvss 可为空对象。
+读取本 run 的 plan_schema，将原始 AuditPlan JSON 写入 plan.json，不使用 ask/finish 封装。
 
-## 5. 交付方案，使用已在线的服务
+- origin 只写身份、版本和用户要求；代码行为、可达性、部署和影响作为待复核 seeds。
+- 所有种子的 audit.review_status 为 unverified，保留条件和未知；无源码引用时 evidence 可为空。evidence 只写仓库内路径与行号，Kritt 回执写 description/review_notes。
+- seed key 唯一，不用 origin/goal；premise_ids 和 Intent.from 只引用本次 seed 或 origin，不引用 goal、不循环。
+- policy 保留 effect/deployment/attacker_capabilities/scope/cvss/evidence_requirements/threat_model。威胁模型 claim 注明 official/inferred/unknown 与 source；源码不自动等于官方模型。静态任务 cvss 可为空。
+- 不放宽用户条件、不把待复核判断当成 policy 前提、不加入“证明不可能”出口。
 
-当前版本尚未交付“连接已有 Cairn 并提交 prepared plan”的纯客户端接口；`cairn start`、旧 `cairn builder` 会管理服务进程，不能由 Builder 调用。不要臆造 submit/resume 命令或用底层建图 API 绕过独立 preflight/seed review。
-完成后交付 plan.json、run 目录、配置路径和资源池摘要；如需立即运行，给出指南中的旧兼容命令，由用户在终端手动执行。若用户已经运行另一套 Cairn，说明当前缺少接入它的提交链路，不建议再启动第二套。
-用户手动运行后，可读取本 run 的状态、修订意见、日志或查询已在线的项目。已有项目禁止重复创建；needs_revision 时在原会话修改方案，当前仍由用户手动重提兼容入口。
-后续纯客户端交付并实际可用后，Builder 可提交并开始任务、请求暂停/恢复、查询进度；服务离线只提示人工启动并等待，不能把系统服务启动当成任务恢复。
-运行与审核保持原有独立会话和结案契约；执行错误不是证据反证。报告真实项目状态、可用网页或结果文件，不伪造已提交/已开始，也不把旧网页地址当作仍在线。
+用户要求提交时运行：
 
-当前用法见 `docs/builder-prepare.md`；人工启动系统与纯客户端使用的目标方案见 `docs/specs/task-recovery-mvp.md`。仅要求配置或准备方案时，交付后结束。
+```sh
+CLIENT submit --server URL --run-dir /path/to/run --config /path/to/task.yaml
+```
+
+默认只等待准备结果，不等待研究终态；不需要留在当前调用时可用 `--no-wait`。执行后按真实返回处理：needs_revision 读取 issues，在当前会话修订原 plan/requirements，再对同一 run submit；pending/preparing 返回提交 ID 与进度路径；running 返回原 project_url、run、配置和池摘要。error/interrupted 不作为证据反证。不要调用底层建图 API 绕过预审和种子复核，也不要把已有项目重新提交成新项目。
+
+## 5. 查看、暂停和恢复原任务
+
+优先用原 run；用户只给 project ID 时使用 `--project ID`。两者二选一：
+
+```sh
+CLIENT status --server URL --run-dir /path/to/run
+CLIENT pause --server URL --run-dir /path/to/run
+CLIENT resume --server URL --run-dir /path/to/run
+```
+
+status 只读，不修改本地回执；即使本地 submission.json 尚无 project_id，也通过稳定 submission_id 查询原项目。以在线 submission/runtime 为准，不把旧文件或网页地址当实时状态。
+
+展示 runtime 的 state/audit_phase、当前阶段和总余额、原角色池、available_actions/blocked_reason，再执行用户要求的控制。已运行的恢复、已暂停的暂停直接说明当前状态；pausing/resuming 只说明正在收敛/恢复，不密集重复提交。短时再次查询确认后，仍在过渡就返回当前状态及网页。
+
+只有旧运行缺失余额时追问一次当前阶段的剩余秒数；preparing 尚未消耗预算，先直接恢复。researching/draining/finalizing 展示对应原预算上限，不从已过期的绝对期限猜余额。用户提供后运行：
+
+```sh
+CLIENT resume --server URL --run-dir /path/to/run --remaining-seconds N
+```
+
+新时钟任务及已迁移任务不再传此参数。completed/budget_exhausted 只查看和导出，不请求恢复或补预算。源码、材料缺失或身份不符时展示具体阻塞，不刷新 Kritt、不新建替代图、不自行回收或重启服务。
+
+任务终态后读取原 run 的 research.json 中 results 指向的五个产物；若还在导出，说明尚未交接完成，稍后读取。用 result.json、completions.json、audit.json 对照真实终态与独立终审，再沿 graph.yaml/timeline.txt、generation 调用记录及 Kritt 查询回执追溯。没有 approved 完成申请不能宣称目标已达成；预算耗尽也不等于证明不可能。
+
+操作细节见仓库 docs/managed-service.md；配置、材料与方案格式见 docs/builder-prepare.md。仅配置或准备方案的请求到交付即结束。

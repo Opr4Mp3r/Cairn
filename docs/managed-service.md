@@ -1,8 +1,8 @@
-# 人工启动 Cairn、在线提交、恢复与运行面板（REC-CP3）
+# 人工启动 Cairn、在线提交、恢复与运行面板（REC-CP4）
 
 当前提供人工 `up` 和纯 HTTP `submit`、`pause`、`resume`。服务持有 Server、Dispatcher 与 Controller；没有任务、预审要求修订或任务结束时，服务继续运行。Builder 只使用在线服务，Kritt 服务也由用户手动启动。
 
-REC-CP2 的暂停时钟、原项目恢复和世代隔离已验收。REC-CP3 的在线运行面板已通过独立验收。Skill 提交/恢复路由属于 REC-CP4，尚未开发。现有 Skill 仍负责准备方案；本页的提交命令可以由用户执行，也可供调用已在线服务的客户端使用。旧 `start` / `builder` 仍是拥有自己服务生命周期的兼容入口，不用于连接这里的服务。
+REC-CP2 的暂停时钟、原项目恢复和世代隔离已验收。REC-CP3 的在线运行面板已通过独立验收。REC-CP4 已验收，Skill 已接入提交/查询/暂停/恢复路由。下列客户端命令可由用户执行，也可由原生 Skill 调用。旧 `start` / `builder` 仍是拥有自己服务生命周期的兼容入口，不用于连接这里的服务。
 
 ## 1. 用户启动一次服务
 
@@ -63,7 +63,13 @@ preflight 与 seed review 复用已有独立会话，审核通过后才创建和
 
 ## 3. 查看进度和复盘
 
-打开 `project_url` 查看现有图页面，或查询提交及项目接口：
+打开 `project_url` 查看图页面；使用只读客户端从原 run 查询在线状态：
+
+```sh
+uv run --project cairn cairn status --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
+```
+
+省略任务定位时只查询服务就绪；带定位时返回 `health`、`submission`、`runtime` 和 `project_url`。该命令不更改本地回执，准备尚未建图、修订或删除时保留提交状态。`--project` 也可读取同库历史查看实例的 runtime，但查看实例不能提交/控制任务。还可以直接查询接口：
 
 ```sh
 curl -s http://127.0.0.1:8000/audit-submissions/SUBMISSION_ID
@@ -123,7 +129,7 @@ uv run --project cairn cairn resume \
 
 旧原生 `start` 的 run 可用其原 `cairn.db` 手动启动服务，再从原 run 恢复。需保留原 `run.json`、`project.json`、`config.yaml`、固定源码与准备材料；程序核对原项目和基线后登记已有图，不重新运行 Builder。旧启动器或子服务仍在线且无法核验归属时，要求用户先手动停止原运行，不凭历史 PID 强杀服务。材料或配置缺失时会明确返回阻塞，不能用新任务替代原图。
 
-源码版本改变、工作目录与项目不一致时返回阻塞并冻结余额。恢复匹配版本/材料后再次请求 resume。前端运行信息和 Builder 对话中的恢复操作将在后续检查点接入。
+源码版本改变、工作目录与项目不一致时返回阻塞并冻结余额。恢复匹配版本/材料后再次请求 resume。前端已接入；CP4 的 Builder 恢复操作复用同一纯客户端入口。
 
 ## 6. 网页查看与控制
 
@@ -144,3 +150,12 @@ uv run --project cairn cairn resume \
 历史回放的运行帧按历史内容显示光效，不受当前任务暂停或结束状态抑制；服务离线时仍停止画布光效。运行图中的方向释放后再次被领取，节点与边的运行指示会一同恢复。
 
 窄屏下，运行概览换行，详情侧栏改为可关闭抽屉；任务图保持可用。普通 generic 项目的 Reopen、历史回放和状态操作沿用原语义。
+
+
+## 7. 原生 Skill 与分发包
+
+在仓库打开 Claude Code，使用 `/cairn-builder` 准备新方案或请求原任务查询/暂停/恢复。已有任务直接进入恢复路径，沿用原图、材料、角色池和余额；只有首次旧余额缺失时才追问。needs_revision 回到原会话修订原 run 后 submit，不重新建图。
+
+Skill 源码位于 `.claude/skills/cairn-builder/`，分发包为 `.claude/artifacts/cairn-builder.skill`。解包后把 cairn-builder 目录放进目标仓库的 `.claude/skills/`；薄脚本通过实际安装路径定位仓库和环境。脚本仅开放 prepare/submit/status/pause/resume，不提供服务启停接口。更新时源码、包内文件和指南必须一致。
+
+本轮完整交付演示使用隔离服务和固定输出的模型 CLI 替身，验证独立终审及结果交接；真实 Claude Code 会话的交互验收应在人工启动的服务中完成，不把替身演示当作真实模型判断。

@@ -2,7 +2,7 @@
 
 交互开题使用项目内的 [cairn-builder Skill](../.claude/skills/cairn-builder/SKILL.md)。Claude Code 当前会话负责问答、Kritt 只读取材、源码阅读和 AuditPlan 修订；独立 Controller 负责 preflight、seed review 与研究监督。
 
-**服务职责约定（2026-10-12）：Kritt 和 Cairn 服务由用户在终端手动启动，Builder 只使用服务，可以提交并开始研究任务。** REC-CP1 已提供人工 `cairn up` 与纯 HTTP `cairn submit`，使用方法见[在线服务指南](managed-service.md)。现有 Skill 仍先交付方案，完整提交/恢复路由留在 REC-CP4；本页后面的 start 命令是由人手动执行的旧兼容用法。
+**服务职责：Kritt 和 Cairn 服务由用户在终端手动启动，Builder 只使用服务，可以提交并开始任务。** REC-CP4 已验收，Skill 已连接 `submit/status/pause/resume`。服务的人工启动与运行面板见[在线服务指南](managed-service.md)。
 
 原 `cairn builder` 保留为已有自动化的批处理兼容入口。研究与结案语义沿用 [v0.5 实现方案](specs/kritt-audit-reconnect-mvp.md)；历史 generic 入口见 [v0.3 记录](specs/kritt-builder-mvp.md)。
 
@@ -44,7 +44,7 @@ export CAIRN_KRITT_READONLY_DSN='host=127.0.0.1 port=5433 dbname=open_kritt user
 
 使用 `/cairn-builder` 时，Claude Code 会先展示当前资源池，主动询问本次沿用还是调整，并按你的自然语言答复直接修改配置。例如：“Explore 用 3 个 Claude Code、2 个 Grok，其余保持当前配置。”没有资源池时，会提出七个角色各一个 Claude Code 的初始方案供选择。已明确的选择不会再次确认，配置后继续开题；也可以只要求配置资源池而不启动研究。
 
-Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及用户手动兼容运行所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；纯客户端随任务提交资源池快照。已有任务不热更新。
+Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及在线提交所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；纯客户端随任务提交资源池快照。恢复已有任务跳过资源池问答，沿用它保存的配置和余额；本轮不热更新。
 
 资源池用于 `runtime.execution: local`。在顶层 `role_pools` 中为每个角色填写可用 harness 及数量。示例默认所有角色各用一个 `claudecode`；若本机 `claude`、`grok` 均已登录并可调用，可这样配置：
 
@@ -82,137 +82,126 @@ Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同�
 /cairn-builder 使用 zentao 目标，静态梳理 module/install/control.php 中构造函数的进入和终止条件，给出表达式与行号；部署和匿名可达性未知，保留为未知。
 ```
 
-项目的 `.claude/skills/cairn-builder/` 是原生安装目录；`.claude/artifacts/cairn-builder.skill` 是分发包，不需要额外 MCP、插件框架或嵌套 Agent。薄脚本 `scripts/cairn.py` 从自己的位置定位仓库，使用 `cairn/.venv`，可从任意工作目录执行。
+项目的 `.claude/skills/cairn-builder/` 是原生安装目录；`.claude/artifacts/cairn-builder.skill` 是分发包，不需要额外 MCP、插件框架或嵌套 Agent。薄脚本 `scripts/cairn.py` 从自己的位置定位仓库，使用 `cairn/.venv`，可从任意工作目录执行；只开放 prepare、submit、status、pause、resume，系统服务命令由用户直接在终端执行。
 
 Skill 在原会话中处理必要追问，并将问题和答复追加到本 run 的 `requirements.json`。目标应写清效果、部署、攻击者能力和范围；已给出的条件会被保留，未知项仍标为未知。取材只用于开题，适合源码理解、调用链/鉴权梳理、复核既有候选及进一步研究。当前没有统一的应用部署、动态 PoC 或正式漏洞报告生成器。
 
-## prepare / 人工 start 旧兼容接口
+## 准备与在线提交
 
-Skill 可以使用 prepare。当前 start 会拉起后台服务，只能由用户在终端手动执行，不能作为 Builder 连接现有 Cairn 的客户端。下列命令仍可在仓库根目录使用。
+先由用户启动 Cairn 执行服务，并通过 `/runtime/health` 确认 `managed=true, ready=true`。只配置资源池或准备方案时无需 Cairn 在线。
 
-先固定输入、核验源码并保存 schema；此步骤不调用模型、不创建研究项目：
+在原生会话中准备固定输入，或在仓库根目录使用：
 
 ```sh
 uv run --project cairn cairn prepare \
   --config dispatch.builder.yaml --target zentao --scan-id 19 \
-  --goal '静态梳理 module/install/control.php 中构造函数的进入和终止条件，给出表达式与行号；部署和匿名可达性未知，保留为未知。' \
+  --goal '静态梳理构造函数的进入和终止条件，引用源码；部署和匿名可达性保留为未知。' \
   --run-dir /absolute/path/to/new-run
 ```
 
-`--run-dir` 必须是源码目录之外、尚不存在的新目录。`--scan-id` 可省略，使用配置中的选择。本 run 的 `run.json` 和命令返回的 JSON 保存 `plan_schema`、需求/参考资料路径及 `kritt_query_command`；读取 schema 后，将原始 AuditPlan JSON 写入本 run 的 `plan.json`，不使用旧 `ask`/`finish` 封装。
+run 必须在目标源码之外且尚不存在。`--scan-id` 可省略；仅在用户选择离线材料时加 `--view /path/to/view.json`。普通 findings JSON 或 ZIP 不是 Cairn 适配视图。prepare 不调用模型或创建研究项目；目标、版本、源码或连接不匹配时报告阻塞，不自动更换。
 
-查询时直接经 Bash 调用返回的完整 `kritt_query_command`，向 stdin 传入 `describe`、`search` 或 `get` JSON，再用 Read 阅读返回的材料路径。查询复用已有 Kritt 只读 CLI，不需用 ToolSearch 寻找 Read/Bash。所有种子初始为 `unverified`，代码判断不能藏入 origin 或 policy 的已知前提。
+读取 `run.json` 中的 `plan_schema`、需求/资料及 `kritt_query_command`。经 Bash 使用该完整查询命令，stdin 输入 describe/search/get JSON，按需用 Read 阅读返回的材料及源码。保留原始 ref 和回执；所有种子初始为 unverified，代码判断不能藏入 origin 或 policy 的已知前提。
 
-离线材料可显式加 `--view /path/to/view.json`，必须是匹配目标的 Cairn Kritt 适配视图，普通 findings JSON 或 ZIP 不能替代。离线模式不会读取在线 PG；保存的视图只表示本次输入，不等于数据库最新结果。目标、scan、commit、源码或连接不匹配时先解决阻塞，不自动换目标或猜测连接。
-
-保存方案后，如果选择由旧兼容入口启动这次服务与任务，由用户手动执行：
+将原始 AuditPlan JSON 保存为 `plan.json` 后提交：
 
 ```sh
-uv run --project cairn cairn start \
-  --config dispatch.builder.yaml --run-dir /absolute/path/to/run
+uv run --project cairn cairn submit \
+  --server http://127.0.0.1:8000 \
+  --run-dir /absolute/path/to/run --config dispatch.builder.yaml
 ```
 
-此旧 `start` 启动后台监督进程，等到独立预审结果或项目启动后返回 JSON。它不连接另一套已运行的 Cairn；已有执行服务时使用[纯提交入口](managed-service.md)，不要启动第二套。用户手动运行旧接口后，Skill 可以读取状态文件继续协助：
+原生 Skill 使用随包的薄脚本执行同样命令。本次 `--config` 提交资源池及执行配置快照，不修改服务配置或热更新其他项目。省略时使用 prepare 保存的 execution.json。
 
-| 返回情形 | 当前会话的下一步 |
+默认只等独立准备完成，不等待整个任务。`--no-wait` 在接纳后返回提交 ID。preflight 与 seed review 使用独立会话，开题会话不自审。
+
+| 返回状态 | 当前会话处理 |
 |---|---|
-| `status=needs_revision` | 读取 `issues`，在原会话修订 `plan.json` 并保留问答；当前由用户手动对同一 run 重提旧 `start` |
-| `status=researching` | 交付 `project_url`、run 目录、`progress` 和 `log` 路径，结束开题 |
-| `status=completed` / `budget_exhausted` / `stopped` | 研究已快速结束、服务已关闭；报告实际终态和 `results` 中的结果文件，不将旧 `project_url` 当作仍可访问的服务 |
-| 执行错误 | 查看错误与日志；执行失败不代表证据被反驳或目标不成立 |
+| pending / preparing | 交付 submission_id 与 run，用 status 查询准备进度 |
+| needs_revision | 读取 issues，在同一会话修改原 plan/requirements，再对同一 run submit；保持提交 ID |
+| running | 交付原 project_url、run、配置与池摘要，后台任务继续 |
+| error / interrupted | 报告错误与阶段；执行失败不等于证据反证；有原图时走恢复路径 |
+| completed / budget_exhausted | 读取原结果与独立终审；系统服务继续在线 |
 
-preflight 与 seed review 使用独立审核会话，开题会话不得自审。已有项目的 run 禁止再次 `start`，直接查看已有网页或进度；需要新任务时使用新的 run 目录。
+已有 project 的 run 不重新建图；同 run 重提相同快照保持提交身份。源码、材料和配置的固定快照用于恢复，不在恢复时刷新 Kritt。
 
-## 查看进度与停止
+## 原生进度、暂停与恢复
 
-以下描述当前人工执行旧 `start` 后的行为。打开返回的 `project_url` 查看任务图；后台进程保有本次 Server、Dispatcher 与 Controller 的生命周期，命令返回后继续研究。本机仍需保持运行，研究终止后会回收本次服务。待服务/客户端拆分完成后，任务结束将不再关闭人工启动的系统服务。
+在 Claude Code 中可以直接请求：
 
-返回的 `progress` 指向 `research.json`，`log` 指向 `launch.log`，`supervisor_pid` 标识本次监督进程。`research.json` 保存研究状态、服务与项目路径；主要状态字段包括：
+```text
+/cairn-builder 查看 http://127.0.0.1:8000 上 /absolute/path/to/run 的进度。
+/cairn-builder 暂停这个 run。
+/cairn-builder 恢复这个 run，沿用原资源池和余额。
+```
 
-- `project_status`：真实项目状态；`status` 还可能表示启动器的 researching、failed 或 interrupted。
-- `audit_phase`：preparing、researching、draining、finalizing 或 closed。
-- `fact_count`：导入种子与新研究事实的总数，不含 origin/goal。
-- `open_intent_count`：尚无结论的研究方向。
-- `termination_reason`：审计终止原因，运行中通常为空。
+这条路径直接定位原任务，不重新询问新任务的目标、scan 或资源池。系统服务离线时只返回人工启动说明，用户手动恢复服务后再请求恢复任务。
 
-Reason 的 Complete 只提出申请；独立终审批准后才是 `completed`。旁路 Overseer 复核事实及研究方向，通过状态和 Hint 纠偏。未验证种子可以作为研究对象，不能成为已确认的完成证明。
+对应 CLI：
 
-| 终态 | 含义 |
+```sh
+uv run --project cairn cairn status --server http://127.0.0.1:8000
+uv run --project cairn cairn status --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
+uv run --project cairn cairn pause --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
+uv run --project cairn cairn resume --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
+```
+
+run 可替换为 `--project PROJECT_ID`。status 不带任务定位时只查服务；带定位时返回 health、在线 submission、runtime 和 project_url。该命令只读，不改本地回执；本地 submission.json 尚无 project_id 时用稳定 submission_id 查询原图。
+
+runtime 展示实际 state、audit_phase、Server 剩余预算、角色池和占用、可用操作及中断原因。pausing/resuming 是过渡状态，短时查询后仍未结束时返回当前状态和网页，不密集重复提交。单项目暂停/终态不关闭系统服务。
+
+旧运行缺少累计时钟时只询问当前阶段的剩余秒数，首次恢复加 `--remaining-seconds N`；新运行和已迁移运行不再传该值。Preparing 尚未消耗运行预算。原材料或身份不匹配时保持阻塞，不猜余额或新建替代任务。上限及旧原生 run 迁移见[在线指南](managed-service.md#5-旧任务的首次余额迁移)。
+
+| 状态 | 含义 |
 |---|---|
-| `completed` | 独立终审批准满足本任务固定 policy；静态任务完成不等于漏洞被确认 |
-| `budget_exhausted` | 有限研究/结案预算结束，保留已有成果；不表示证明无漏洞 |
-| `stopped` | 用户停止或执行错误后的项目停止；错误详情另存 |
+| completed | 独立终审批准满足固定 policy；静态任务完成不等于发现漏洞 |
+| budget_exhausted | 预算结束并保存成果，不表示证明不存在风险 |
+| paused / interrupted / blocked | 原任务暂停、中断或恢复受阻，图与余额保留 |
 
-可在图页面停止项目；需要终止本次监督进程时，对返回的 `supervisor_pid` 发送 SIGTERM（`kill -TERM PID`），由该进程清理本次拥有的服务和 Agent。draining 不是终态：系统停止新派发，允许已开始任务有限收尾，再由 Closing 检查最终图中的候选并走独立终审。
+Reason 的 Complete 只是申请，Overseer 复核事实和方向，独立终审决定完成。draining 停止新 Explore，再用最终图走有界结案，不重新分配研究预算。
 
 ## 时间配置
 
-示例使用已有字段，按实际模型耗时调整：
-
 | 配置 | 示例秒数 |
 |---|---:|
-| `controller.timeouts.build` | 300 |
-| `controller.timeouts.preflight`、`seed_review` | 240 |
-| `controller.timeouts.overseer`、`closing` | 180 |
-| `controller.timeouts.final_review` | 240 |
-| `tasks.reason.timeout`、`tasks.explore.timeout` | 120、300 |
-| `controller.budget.research_seconds` | 1800 |
-| `controller.budget.drain_seconds` | 120 |
-| `controller.budget.final_review_seconds` | 600 |
+| controller.timeouts.build | 300 |
+| controller.timeouts.preflight、seed_review | 240 |
+| controller.timeouts.overseer、closing | 180 |
+| controller.timeouts.final_review | 240 |
+| tasks.reason.timeout、tasks.explore.timeout | 120、300 |
+| controller.budget.research_seconds | 1800 |
+| controller.budget.drain_seconds | 120 |
+| controller.budget.final_review_seconds | 600 |
 
-`controller.timeouts.build` 仅约束旧批处理的内部 Builder 调用，不限制原生 Skill 的用户问答。单次审核/研究调用时限包含其内部读文件和工具循环；不因每次查询重置。audit 预算从项目激活时开始，三段绝对期限保存在 Server 中。复核、Closing、终审还受剩余总期限约束，配置的单次时限不是每个阶段都能获得的保留时长。当前没有 Token 总预算或准备阶段累计预算。
+build 时限只用于旧批处理 Builder，不限制原生会话问答。业务预算使用 Server 累计有效运行时间，暂停和停机冻结余额；审核轮次/单次窗口也使用同一业务时钟。CLI 调用超时与终止宽限仍按真实经过时间计时。当前没有 Token 总预算或准备阶段累计预算。
 
 ## 保存结果与复盘
 
-后台研究结束后在状态文件的 `results` 中记录五个结果文件路径。每次运行目录保存：
+运行中的在线状态以 status/API 为准，run 文件是本地交接记录。终态后读取 research.json 的 results，确认导出已完成，再检查五个结果产物。
 
-| 文件/目录 | 内容 |
+| 文件或位置 | 内容 |
 |---|---|
-| `run.json`、`requirements.json` | 固定输入、repo/scan/commit、准备产物位置，以及原会话保存的需求/答复 |
-| `audit-plan.schema.json` | 本次 AuditPlan 的 JSON schema |
-| `plan.json` | 最终 AuditPlan、policy、种子及初始 Intents |
-| `kritt-view.json`、`queries/`、`query-receipts.json` | 固定输入视图、每次查询与分页返回 |
-| `selected-materials.json` | 完整 get 返回的材料；不代表模型全部读过或结论已验证 |
-| `source-baseline.json`、`references.json`、`references/` | 核验基线及一次保存的参考资料 |
-| `project.json` | 项目 ID、seed key 到 Fact ID 映射、工作目录 |
-| `research.json` | 服务进程、运行/项目状态、阶段、终止原因、结果位置及错误 |
-| `launch.json`、`launch.log` | 后台监督进程的启动/修订/研究状态与日志 |
-| `error.json` | Builder 已创建运行目录后的准备错误；此时可能尚无研究数据库或 `research.json` |
-| `result.json` | 结束时的项目、Facts、Intents 和 Hints |
-| `graph.yaml`、`timeline.txt` | 最终图及图变化时间线 |
-| `audit.json` | policy、基线、预算期限、审核记录和 Closing 状态 |
-| `completions.json` | 完成申请、证明来源、审核 session、裁决与执行错误；没有申请时为 [] |
-| `cairn.db`、三个服务日志 | 本次数据库、server/dispatcher/controller 日志 |
-| `controller/prepare-<submission>/` | 原生入口每次提交的独立预审与种子审核原始输入/回答；旧批处理使用 `controller/prepare/`，另有 `call-*/` |
-| `work/<project>/research/`、`work/<project>/controller-reviews/` | Explore/Reason 与旁路复核原始 Prompt、session、stdout/stderr |
+| run.json、requirements.json | 固定输入、版本、路径、原会话需求/答复 |
+| audit-plan.schema.json、plan.json | 本次 schema 和方案 |
+| kritt-view.json、queries/、query-receipts.json、selected-materials.json | 固定视图、查询材料及回执 |
+| source-baseline.json、references.json、references/ | 源码基线和参考资料 |
+| execution.json、submission.json | 准备时的执行配置与客户端最近读取的提交记录 |
+| project.json、controller/prepare-*/ | 原 project、种子映射、独立预审/种子复核 |
+| research.json | 当前交接状态、世代、服务/数据库身份、终态 results |
+| result.json | 最终项目、Facts、Intents、Hints |
+| graph.yaml、timeline.txt | 图和变化时间线 |
+| audit.json、completions.json | policy、审核、结案与完成申请、证明、裁决和执行错误 |
+| 服务目录 submissions/、work/ | 接纳快照及按 generation 保存的研究/复核原始调用 |
+| 用户手动 up 的数据库与终端日志 | 持久化图、运行历史、系统执行记录 |
 
-复盘从 `result.json` 的真实终态开始，结合 `completions.json` 判断是谁提出申请、终审是否批准，再看 `audit.json` 的证据/条件及错误。用 `project.json` 区分 Kritt 导入种子和新增 Fact，沿图与时间线找到产生它的 Intent，回查原始调用与查询资料。
+从 result.json 的终态与 completions.json 的独立批准开始，沿图和时间线找到 Fact 的生产 Intent，核对 audit.json 的证据/条件，再看对应世代的调用和 Kritt 查询回执。没有 approved 完成申请不能声称目标达成。日志面板显示保存回执，不是 CLI 内部步骤直播；历史产物与数据库应一并保留。
 
-执行失败与证据驳回有不同记录。准备阶段失败先查看终端输出和本 run 已生成的错误文件；尚未创建运行目录的错误以终端输出为准，此时可能没有研究数据库或 `research.json`。研究启动后的错误或中断会保留已有数据库和材料；服务不可用或导出失败时文件可能不齐，`research.json` 记录实际错误，不把缺失文件伪装成正常结案。CLI 的退出码不能替代项目和申请状态判断。
+## 人工旧兼容入口
 
-源码仍是链接，不是运行目录中的完整副本；保留对应源码及 manifest。原生 harness 的细粒度工具轨迹依赖其会话日志，当前归档不承诺完整可重放环境。
-
-## 重新查看已保存项目
+旧 start / builder 仍管理自己的服务生命周期，仅供用户在终端手动执行，原生 Skill 不调用它们。已有在线执行服务时优先使用 submit，避免重复启动。
 
 ```sh
-uv run --project cairn cairn serve \
-  --db-path /absolute/path/to/run/cairn.db --port 8000
+uv run --project cairn cairn start --config dispatch.builder.yaml --run-dir /absolute/path/to/run
 ```
 
-打开 `http://127.0.0.1:8000/#/projects/proj_001`，ID 使用本次实际值。这只展示已有项目，无需重新 `start` 或启动 Dispatcher。已创建项目不能借 `start` 重复启动；恢复研究需遵循旧 audit 指南，不重置预算。
-
-## 兼容入口
-
-原 `cairn builder` 保留为已有批处理兼容入口：在目标和需求已明确时，一条命令完成内部 Builder 取材、审核、前台研究与结案。它有自己的模型调用和旧问答协议；需要持续原生问答的新任务使用 Skill。
-
-```sh
-uv run --project cairn cairn builder \
-  --config dispatch.builder.yaml --target zentao --scan-id 19 \
-  --goal '完整且明确的任务目标' --run-dir /absolute/path/to/new-run
-```
-
-这些兼容命令由用户手动执行：旧 `builder` 在前台持有研究生命周期，可按 Ctrl+C 停止；旧 `start` 在后台持有生命周期，可通过项目网页停止研究。Builder Skill 不执行这两种会拉起服务的入口。
-
-新配置通过 `role_pools` 选择后台研究与审核的 harness，不会改变原生 Skill 当前会话所使用的模型。旧 `workers` / `controller.roles` 配置仍可使用；纯资源池配置下，旧批处理 Builder 复用 Closing 池的执行者。
-
-各 harness 的实际验证范围以验收记录为准，单元回归或命令帮助检查不等于真实模型的完整研究演示。
+旧 run 的 launch.json/launch.log、cairn.db 和三个服务日志属于该旧启动器，不是新在线提交必须生成的文件。迁移时由用户用原数据库手动 up，保留原 run/config/源码和材料，再请求在线恢复；已经创建项目的 run 不再次 start。

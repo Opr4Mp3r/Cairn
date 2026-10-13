@@ -202,18 +202,18 @@ Local mode is selected by `runtime.execution: local` (see `dispatch.local.exampl
 /cairn-builder 使用 zentao 目标，静态梳理 module/install/control.php 构造函数的进入和终止条件，列出表达式与行号；部署和匿名可达性未知。
 ```
 
-先按 [Builder 使用指南](docs/builder-prepare.md) 配置源码、manifest 和只读连接。Kritt/Cairn 服务由用户手动启动，Builder 只使用已有服务。[在线服务入口](docs/managed-service.md)提供人工 `cairn up` 与纯 HTTP `cairn submit/pause/resume`，任务结束后服务继续在线。REC-CP3 已验收，提供网页运行概览、在线暂停/恢复、资源池占用与离线快照。现有 Skill 暂时交付方案，提交/恢复路由将在后续检查点接入；旧 `start` 仍由用户手动执行。任务恢复及运行面板进度见[开发方案](docs/specs/task-recovery-mvp.md)。
+先按 [Builder 使用指南](docs/builder-prepare.md) 配置源码、manifest 和只读连接。Kritt/Cairn 服务由用户手动启动，Builder 只使用已有服务。[在线服务入口](docs/managed-service.md)提供人工 `cairn up` 与纯 HTTP `cairn submit/status/pause/resume`，任务结束后服务继续在线。REC-CP3 已验收，提供网页运行概览、在线暂停/恢复、资源池占用与离线快照。REC-CP4 已验收，Skill 已接入纯客户端 submit/status/pause/resume；旧 `start` 仍由用户手动执行。任务恢复及运行面板进度见[开发方案](docs/specs/task-recovery-mvp.md)。
 
 后台角色使用 [角色资源池](docs/builder-prepare.md#角色资源池)：例如 `explore: {claudecode: 3, grok: 2}` 允许同一项目最多五个 Explore 并行。各角色容量直接由 harness 数量相加，模型与 provider 沿用本机 CLI 配置；原生 Builder 留在当前会话。
 
 | 入口或文档 | 当前用途 |
 |---|---|
-| [原生 cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) | 资源配置、取材与方案交付；服务启停由用户手动执行 |
-| [Builder 使用指南](docs/builder-prepare.md) | 准备配置、prepare/start 接口、后台研究、预算和结果复盘 |
-| [在线服务指南](docs/managed-service.md) | 人工 up、纯客户端 submit、提交修订与配置快照 |
+| [原生 cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) | 资源配置、取材、在线提交与原任务查询/恢复；服务启停由用户手动执行 |
+| [Builder 使用指南](docs/builder-prepare.md) | 准备配置、prepare/submit/status/pause/resume、旧兼容入口和结果复盘 |
+| [在线服务指南](docs/managed-service.md) | 人工 up、纯客户端任务控制、运行面板和旧余额迁移 |
 | [Kritt 取材探针](docs/kritt-probe.md) | 只读查询与源码观察，不创建研究项目 |
 | [本地 audit 模式](docs/audit-local.md) | 已有独立审计路径，包含复核、终审及预算 |
-| [任务恢复与运行面板方案](docs/specs/task-recovery-mvp.md) | REC-CP1/CP2 已验收；REC-CP3 运行面板已验收；CP4 Skill 路由后续接入 |
+| [任务恢复与运行面板方案](docs/specs/task-recovery-mvp.md) | REC-CP1/CP2 已验收；REC-CP3 运行面板已验收；REC-CP4 Skill 路由已验收 |
 
 原 `uv run --project cairn cairn builder ...` 保留为已有自动化的批处理兼容入口。其内部 Builder 会话及前台研究生命周期与原生 Skill 入口不同；新交互任务使用 Skill。
 

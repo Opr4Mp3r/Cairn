@@ -122,6 +122,27 @@ def submit(server, run_dir, config_path, wait):
         raise click.ClickException(result.get("error") or result["status"])
 
 
+@main.command("status")
+@click.option("--server", required=True, help="已人工启动的本机 Cairn 地址")
+@click.option("--project", "project_id")
+@click.option("--run-dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def status(server, project_id, run_dir):
+    """只读查询服务或原任务；不启动服务、不更新本地回执。"""
+    from cairn.controller.submissions import inspect_prepared
+    import requests
+    if project_id and run_dir:
+        raise click.ClickException("Provide at most one of --project or --run-dir")
+    try:
+        result = inspect_prepared(server, project_id=project_id, run_dir=run_dir)
+    except requests.HTTPError as exc:
+        raise click.ClickException(f"Status read failed: {exc}") from exc
+    except requests.RequestException as exc:
+        raise click.ClickException("Cairn is unavailable; start/check it manually") from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
 def _task_control(action, server, project_id, run_dir, remaining_seconds=None):
     from cairn.controller.submissions import control_prepared
     import requests
