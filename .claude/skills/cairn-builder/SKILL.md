@@ -5,6 +5,8 @@ description: 在 Claude Code 原生会话中管理 Cairn 的本地源码审查�
 
 # Cairn 原生审查与任务控制
 
+按任务阅读：[路径选择](#1-先选择任务路径) · [资源池](#2-主动配置新任务的资源池) · [固定输入与取材](#3-准备固定输入与取材) · [方案与提交](#4-保存方案并提交) · [原任务控制](#5-查看暂停和恢复原任务)。
+
 直接使用当前会话的 Read、Bash、Write/Edit；不创建 MCP、嵌套 Builder 或另一套调度器。服务运行后可以提交并开始任务；服务的启动、关闭、重启由用户在终端执行。连接失败只说明人工启动方式，不执行 Docker 启停、`cairn up/serve/dispatch/start/builder/audit`、后台守护或换端口启动服务。
 
 本 Skill 负责已授权本地源码的静态审查、风险证据核对和修复研究；不构造或执行利用链。保留用户条件与未知，研究判断由现有独立审核流程处理。
@@ -58,15 +60,20 @@ CLIENT prepare --config /path/to/task.yaml --target TARGET \
 
 按需要查询 entrypoint/flow/finding，保留原始 ref 和分页 cursor；get 自动收齐分支。用 Read 阅读材料、回执、参考资料及必要源码，不拼接完整源码清单。Kritt 的 rank/canonical/valid/scope 是分析标签，不能当作已确认前提。开题不改目标源码、不部署目标或接管后台研究。
 
+按用户目标的具体缺口选材，不只看高排名 finding；正常功能、低排名及无 finding 流程也可能提供关键条件。查询未命中不等于不存在，必要时返回固定源码独立发现。提供紧凑起点与待验证假设即可，不把全库导成 seeds。
+
+研究角色会获得已提交固定视图的 kritt_query 命令，并可持续查询；并发查询各自保存材料和回执，不回写开题选材或刷新数据库。原生 Builder 会话无需留驻或替后台继续研究。
+
 ## 4. 保存方案并提交
 
 读取本 run 的 plan_schema，将原始 AuditPlan JSON 写入 plan.json，不使用 ask/finish 封装。
 
 - origin 只写身份、版本和用户要求；代码行为、可达性、部署和影响作为待复核 seeds。
-- 所有种子的 audit.review_status 为 unverified，保留条件和未知；无源码引用时 evidence 可为空。evidence 只写仓库内路径与行号，Kritt 回执写 description/review_notes。
-- seed key 唯一，不用 origin/goal；premise_ids 和 Intent.from 只引用本次 seed 或 origin，不引用 goal、不循环。
+- 所有种子的 audit.review_status 为 unverified；description 首段给出主要结论和关键条件，保留对象归属、作用范围、状态／时序及未知。无源码引用时 evidence 可为空；evidence 只写仓库内路径与行号，Kritt 回执写 description/review_notes。
+- seed key 唯一，不用 origin/goal；premise_ids 和 Intent.from 只引用本次 seed 或 origin，不引用 goal、不循环。Intent.from 是选材来源，premise_ids 仅列实际逻辑依赖，不自动互相复制。
 - policy 保留 effect/deployment/attacker_capabilities/scope/cvss/evidence_requirements/threat_model。威胁模型 claim 注明 official/inferred/unknown 与 source；源码不自动等于官方模型。静态任务 cvss 可为空。
 - 不放宽用户条件、不把待复核判断当成 policy 前提、不加入“证明不可能”出口。
+- policy 固定初始能力；后续能力须由前序证据解释。组合 Intent 说明前一步产生什么、后一步缺什么及待验证的连接；条件下机制成立、可接入当前路径、满足 Goal 分别判断，不预判衔接成功。
 
 用户要求提交时运行：
 

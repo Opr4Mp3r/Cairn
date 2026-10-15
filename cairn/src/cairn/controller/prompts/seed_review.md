@@ -6,6 +6,8 @@
 
 对每个 key 输出且仅输出一项 review，audit 包含 evidence（真实相对路径与行号）、conditions、premise_ids、review_status、validation_level、review_notes。明确已观察、直接后果和条件延伸；必要条件不能因追求 Goal 被省略。verified 只表示在记录条件下得到支持，refuted 需要具体反证；缺运行环境、超时、找不到调用者或未知配置都保留 unverified。不要求为了定级执行破坏性实验。
 
+保留对象归属、作用范围、状态和生效时序，区分“条件下机制得到支持”与“条件已在本次部署满足”。各 seed 分别成立不证明其可组合；尚未验证的连接和后续能力来源明确留为未知，不替构建者补齐。
+
 核对每个主张最弱前提，允许零 verified，不把代码级引用验证冒充匹配部署验证。复核期间不继续探索或修改源码。只返回符合 output_schema 的原始 JSON 对象。
 
 节点引用只允许 valid_fact_references 中的 ID；特殊起点 ID 是字面量 "origin"。plan.origin 是描述文本，不是节点 ID。每个 key 必须精确等于输入种子的 key。保持说明紧凑，不重复完整源码或整份审计报告。
