@@ -7,7 +7,7 @@ import json
 
 import yaml
 
-READING_GUIDANCE = "源码版本和文件完整性由程序核验；按任务读取相关源码和资料，不读取 source-baseline.json 或文件哈希清单。"
+READING_GUIDANCE = "源码版本和文件完整性由程序核验；归档源码可能没有 Git 元数据，不以外层 Cairn 仓库的 HEAD 代替目标版本。按任务读取相关源码和资料，不读取 source-baseline.json 或文件哈希清单。"
 
 
 def baseline_identity(baseline: dict) -> dict:

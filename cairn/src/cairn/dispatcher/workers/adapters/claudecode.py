@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import json
+
 from cairn.dispatcher.config import WorkerConfig
 from cairn.dispatcher.workers.base import DriverResult, SeedSessionDriver
 from cairn.dispatcher.workers.health import HealthResult, http_ping, proxies_from_env
 
 
 ANTHROPIC_VERSION = "2023-06-01"
+FINAL_JSON_INSTRUCTION = (
+    "For this non-interactive invocation, your final answer must be exactly one JSON object matching the requested schema. "
+    "Do not put prose, progress reports, or Markdown before or after the final JSON object. "
+    "Tools and progress updates while working are allowed; the final answer must contain only the JSON object."
+)
 
 
 class ClaudeCodeDriver(SeedSessionDriver):
@@ -43,6 +50,8 @@ class ClaudeCodeDriver(SeedSessionDriver):
                 "--session-id",
                 session,
                 "--dangerously-skip-permissions",
+                "--output-format", "json",
+                "--append-system-prompt", FINAL_JSON_INSTRUCTION,
                 "-p",
                 "--",
                 prompt,
@@ -56,7 +65,22 @@ class ClaudeCodeDriver(SeedSessionDriver):
             "-r",
             session,
             "--dangerously-skip-permissions",
+            "--output-format", "json",
+            "--append-system-prompt", FINAL_JSON_INSTRUCTION,
             "-p",
             "--",
             prompt,
         ]
+
+    def extract_response_text(self, stdout: str, stderr: str) -> str:
+        try:
+            payload = json.loads(stdout)
+        except ValueError:
+            return stdout
+        if not isinstance(payload, dict) or payload.get("type") != "result":
+            return stdout  # Older adapters and local CLI fixtures return the answer directly.
+        if payload.get("is_error") or payload.get("subtype") != "success":
+            raise ValueError(f"Claude Code result failed: {payload.get('subtype')}")
+        if not isinstance(payload.get("result"), str):
+            raise ValueError("Claude Code result must contain final answer text")
+        return payload["result"]

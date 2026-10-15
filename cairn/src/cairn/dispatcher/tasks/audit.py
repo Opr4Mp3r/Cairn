@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from cairn.dispatcher.config import DispatchConfig
 from cairn.audit_evidence import source_evidence, assert_repository_unchanged
-from cairn.audit_inputs import baseline_identity
+from cairn.audit_inputs import baseline_identity, READING_GUIDANCE
 from cairn.dispatcher.contracts import parse_json_output, validate_explore_payload, validate_reason_payload
 from cairn.dispatcher.output_parser import FENCED_BLOCK_RE
 from cairn.dispatcher.prompting import load_prompt, render_prompt
@@ -82,7 +82,7 @@ def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, r
     }
     if reason_memory is not None:
         context["reason_memory"] = reason_memory
-    return render_prompt(load_prompt(config.controller.research_prompt_group, name),
+    return render_prompt(READING_GUIDANCE + "\n\n" + load_prompt(config.controller.research_prompt_group, name),
                          {"intent_sources": "[]", **replacements, "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
 
 

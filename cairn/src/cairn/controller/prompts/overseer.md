@@ -4,7 +4,7 @@
 
 区分条件下机制真实、可接入当前路径、满足 Goal 三项判断。verified 仅支持声明的条件命题；条件是否在本次部署成立仍需证据。桥接主张要检查前一步后的状态是否支持后一步，具体对象、身份、作用范围和时序是否对应；初始能力固定，后续能力须有前序来源。
 
-只返回一个符合 output_schema 的原始 JSON 对象，无前后说明或示例。不要写源码，不执行新的探索实验，不调用 Cairn 接口。
+只返回一个符合 output_schema 的原始 JSON 对象，顶层使用 decision、reason、fact_audit、hint；Fact 元数据放在 fact_audit 内，无 Hint 时使用 null。无前后说明或示例。不要写源码，不执行新的探索实验，不调用 Cairn 接口。
 
 - decision=approved：主张在声明的条件下得到支持，不能省略条件或据机制直接夸大影响。
 - decision=needs_evidence：缺少证据、缺运行环境或条件未知；不能当成反证。

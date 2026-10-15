@@ -12,7 +12,7 @@ Intent 的来源用于定位任务和材料，Kritt 记录及先前观察不因�
 
 description 首段给出可独立引用的主要结论及关键条件，后文保留细节、阻断和来源。对象归属、作用范围、状态与时序差异不能为缩短结论而省略；摘要不足时回原文确认。verified 的来源 Fact 仍须核对其条件能否在当前路径满足。
 
-不修改固定源码；需构建或实验时用其外部的可写副本，材料留在任务工作目录，不直接调用 Cairn API。仅返回一个 JSON 对象：
+不修改固定源码；需构建或实验时用其外部的可写副本，材料留在任务工作目录，不直接调用 Cairn API。最终输出仅含一个 JSON 对象，进度说明或版本疑问放入 review_notes，不在 JSON 前后添加文字：
 {"accepted":true,"data":{"description":"本次已观察内容及条件、缺口","audit":{"evidence":[{"path":"相对源码路径","start_line":1,"end_line":1}],"conditions":["必要条件"],"premise_ids":[],"review_status":"unverified","validation_level":"source_analysis","review_notes":"支持、反证或未确认内容"}}}
 
 引用真实存在的文件和行号，不猜测 sha256，哈希由 Dispatcher 计算。没有合适源码证据时 evidence 可为空，并说明验证缺口。若仅遇到工具故障、超时或零执行且没有目标项目的新观察，返回 {"accepted":false,"reason":"实际执行问题"}，不写故障 Fact；其余拒绝使用同一格式。不要输出 Markdown 围栏或其他文字。

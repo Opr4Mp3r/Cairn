@@ -8,12 +8,17 @@ import subprocess
 import pytest
 
 from cairn.controller.kritt import KrittView
-from cairn.controller.kritt_query import prepare_research_query, run_query
+from cairn.controller.kritt_query import collect_queries, prepare_research_query, run_query
+from cairn.controller import monitor
+from cairn.controller.models import AgentCallResult
 from cairn.controller.research import import_audit_plan
 from cairn.controller.service import ManagedService
 from cairn.controller.submissions import execution_snapshot, read_prepared, save_snapshot
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.runtime.local_backend import LocalBackend
+from cairn.dispatcher.runtime.cancellation import TaskCancellation
+from cairn.dispatcher.runtime.process import ProcessResult
+from cairn.server.models import ClosingResult, FinalAssessment
 from cairn.dispatcher.tasks.audit import research_prompt
 from test_audit_workflow import api, install_cli
 from test_kritt_audit_reconnect import seed_review
@@ -106,3 +111,60 @@ def test_audit_examples_use_existing_reason_timeout():
     root = Path(__file__).resolve().parents[2]
     for name in ("dispatch.service.example.yaml", "dispatch.builder.example.yaml", "dispatch.audit.example.yaml"):
         assert DispatchConfig.load(root / name).tasks.reason.timeout == 1800
+
+
+@pytest.mark.parametrize("phase,model", [("overseer", monitor.NodeAssessment), ("closing", ClosingResult),
+                                         ("final_review", FinalAssessment)])
+def test_reviews_locate_research_receipts_separately_from_opening_ledger(probe, api, tmp_path, monkeypatch, phase, model):
+    config, prepared, _ = configured(probe)
+    view = KrittView.load(Path(prepared["run_dir"]) / "kritt-view.json")
+    opening_context = Path(prepared["query_context"])
+    run_query(opening_context, {"action": "get", "ref": view.ref("workflows.step_results", 20, "19-1").model_dump(mode="json")})
+    collect_queries(opening_context)
+    install_cli(tmp_path, monkeypatch, [{"approved": True, "issues": []}, seed_review()])
+    client, _ = api
+    backend = LocalBackend(config.local)
+    result = import_audit_plan(config, client, backend, prepared, external_builder=True)
+    project = client.get_project(result["project_id"])
+    workspace = Path(result["workspace"])
+    research = run_query(workspace / "kritt-context.json", {
+        "action": "get", "ref": view.ref("workflows.step_results", 21, "19-1").model_dump(mode="json"),
+    })
+    research_receipts = json.loads(Path(research["receipts_path"]).read_text())
+    receipt_id = research_receipts["receipts"][0]["receipt"]["receipt_id"]
+    opening = workspace / "query-receipts.json"
+    protected = {p: p.read_bytes() for p in [opening, Path(research["receipts_path"]), Path(research["materials_path"])]}
+    assert receipt_id not in {r["receipt"]["receipt_id"] for r in json.loads(opening.read_text())["receipts"]}
+    fact = next(f for f in project.facts if f.id == result["seed_ids"]["entry"])
+
+    def assess(_config, _backend, *, prompt, **kwargs):
+        payload = json.loads(prompt.rsplit("\n\n", 1)[1])
+        locations = payload["query_receipts"]
+        assert Path(locations["opening_ledger"]) == opening
+        assert Path(locations["view_context"]) == workspace / "kritt-context.json"
+        directory = Path(locations["research_directory"])
+        matches = [r["receipt"] for p in directory.glob("q-*/receipts.json") for r in json.loads(p.read_text())["receipts"]
+                   if r["receipt"]["receipt_id"] == receipt_id]
+        assert len(matches) == 1 and matches[0]["parameters"]["ref"]["id"] == 21
+        assert matches[0]["view_digest"] == view.digest
+        assert "开题查询，不是完整研究账本" in prompt and "不运行新查询" in prompt
+        if phase == "overseer":
+            answer = {"decision": "approved", "reason": "research receipt located", "fact_audit": fact.audit.model_dump(mode="json"), "hint": None}
+        elif phase == "closing":
+            answer = {"kind": "no_candidate", "from": [], "description": "existing receipts checked"}
+        else:
+            answer = {"decision": "needs_evidence", "reason": "receipt existence does not establish the goal",
+                      "proof_ids": [fact.id], "checks": dict.fromkeys(["effect", "deployment", "attacker_capabilities", "scope", "cvss", "evidence"], False),
+                      "cvss_vector": None}
+        raw = json.dumps(answer)
+        return AgentCallResult(role=kwargs["role"], worker="fixture", harness="mock", phase=phase, workspace=str(workspace),
+                               session="review-session", prompt=prompt, status="success", response=raw, data=answer,
+                               process=ProcessResult(0, raw, ""), elapsed_seconds=0)
+
+    monkeypatch.setattr(monitor, "call_agent", assess)
+    context = client.get_review_input(project.project.id, "fact", fact.id)["context"] if phase == "overseer" else {
+        "graph": project.model_dump(mode="json", by_alias=True), "policy": project.project.audit.policy}
+    verdict, _ = monitor._invoke(config, client, backend, project, phase=phase, context=context, model=model,
+                                 timeout=10, cancellation=TaskCancellation())
+    assert verdict.status == "success"
+    assert all(p.read_bytes() == content for p, content in protected.items())

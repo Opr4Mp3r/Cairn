@@ -86,8 +86,14 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
         folder /= f"generation-{project.project.runtime_generation:03d}"
     folder /= f"{phase}-{uuid.uuid4().hex}"
     folder.mkdir(parents=True)
+    materials = material_paths(workspace)
     payload = {**agent_view(context), "repo_path": project.project.audit.repo_path,
-               "materials": material_paths(workspace),
+               "materials": materials,
+               "query_receipts": {
+                   "opening_ledger": materials.get("query-receipts.json"),
+                   "research_directory": str(workspace / "research" / "kritt-queries"),
+                   "view_context": str(workspace / "kritt-context.json") if (workspace / "kritt-context.json").is_file() else None,
+               },
                "output_schema": model.model_json_schema(by_alias=True)}
     if phase == "overseer" and "audit" in context["target"]:
         payload["unsupported_premise_ids"] = [
@@ -105,6 +111,10 @@ def _invoke(config, client, backend, project, *, phase, context, model, timeout,
             payload["reference_check"] = {"status": "needs_evidence", "error": str(exc)}
     instruction = resources.files("cairn.controller").joinpath(f"prompts/{phase}.md").read_text(encoding="utf-8")
     instruction += "\n" + READING_GUIDANCE
+    instruction += ("\nquery_receipts.opening_ledger 只含开题查询，不是完整研究账本。研究期已发生的查询在 "
+                    "research_directory/q-*/，每次保存 request.json、result.json、receipts.json，get 另有 materials.json；"
+                    "引用研究回执时到该目录按 receipt_id、参数和 view_digest 定位，不能仅因开题账本没有就判定不存在。"
+                    "view_context 标识本次固定视图。复核只读取已有文件，不运行新查询或展开新探索。")
     prompt = instruction + "\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     (folder / "input.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     try:

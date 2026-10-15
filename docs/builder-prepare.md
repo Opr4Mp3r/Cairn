@@ -133,6 +133,40 @@ uv run --project cairn cairn submit \
 
 已有 input.json 的工作区在恢复时同样补齐入口；缺少固定查询材料时显示不可用原因，仍可继续读取源码。该能力只作用于使用新版代码激活或恢复的任务，不要求为现有研究重建项目。
 
+运行期 Overseer、结案与终审的 `query_receipts` 输入区分开题账本 `opening_ledger` 和已发生研究查询的 `research_directory`。开题账本不包含后来查询的全部回执；研究引用按该目录的 `q-*/receipts.json`、request/result 和 get 材料定位，固定视图身份见 `view_context`。复核只读已有记录，不发起新查询；不能仅因开题账本没有某个回执就判定它不存在。
+
+## 组合研究与规划记忆
+
+Reason 先读取 `graph-index.md` 导航，再按当前缺口打开完整 `graph.yaml`、Kritt 材料和源码。导航保留条件、验证状态和逻辑前提；截断预览仅供定位，旧 Fact 不被改写。Explore 的结论先写带关键条件的主要观察，再保留对象、作用范围、生效时序和未知项。
+
+桥接研究需要解释“前一步执行后的状态如何满足后一步”，分别验证的两个机制不自动组成有效路径。`verified` 支持的是声明的条件命题，是否符合当前部署及 Goal 还需判断。正常功能、低排名材料和无 finding 流程都可用于寻找互补条件；未确认观察也可用于安排验证，普通探索不等待逐条复核，完成申请仍经过独立终审。
+
+审计 Reason 可返回 `planning_notes` 保存已考虑的连接、暂搁原因、重开条件和下一步重点。程序把有效成功的备注保存在工作区 `research/generation-*/reason-memory-*.json`，下一轮提供最近规划及最近失败原因的简要记录和回执路径。它不进入 Fact、不改变审核状态，也不触发新一轮 Reason；无需增加配置。旧输出不含备注时继续兼容。暂停或恢复后以当前图、Hint 和 policy 为准，不把旧备注当作证据。
+
+后台 claudecode 调用使用 CLI 原生 JSON 结果信封和每次调用的最终格式指引，adapter 只解包 `result`，上层继续严格校验业务 JSON。原始信封仍留在调用回执中；CLI 执行失败不会被当成有效回答。源码版本与文件指纹由程序核验，归档源码没有 Git 元数据时，不以外层 Cairn 仓库 HEAD 替代目标版本。
+
+## 隔离的组合研究样例
+
+开发样例位于 `cairn/tests/test_compositional_research.py`，使用自有合成源码与离线 Kritt 格式材料，无需运行 Kritt。它比较同一调用顺序下的两种读取行为：创建 Display，发布新值，再用原 Display 读取。实时读取共享状态可以衔接；读取初始化快照时，发布动作不能更新原对象的快照。两例均保持相同 Goal，不允许通过重建对象或改源码凑结果。
+
+当前样例的开题 get20 展开元数据已经包含读取端流程；后续 get21 验证固定查询入口与材料定位，不作为“发现此前未提供的信息”的证明。规划备注是否进入后续 prompt、该调用是否成功返回分别核对，不能由注入推断模型成功运用。
+
+样例显式启用后会调用本机真实 Claude Code，沿用 CLI／CCSwitch 的模型与登录。运行于独立临时源码、端口、数据库和各角色仅一个 Claude Code 的资源池；自动启动和清理的是测试服务。该测试启动器仅用于开发验证，不改变日常服务由用户手动启动的方式。普通测试默认跳过模型调用。
+
+样例研究预算为 420 秒、收尾 60 秒、终审 480 秒；目标达成可提前结束。预审和种子复核另占调用时间，实际耗时随本机模型而变。Reason 单次 1800 秒上限仍受这些项目预算约束。
+
+在仓库根目录执行，并为 `--basetemp` 选择全新目录（pytest 会重建该目录）：
+
+```sh
+CAIRN_COMPOSITION_REAL_CLAUDE=1 uv run --project cairn pytest -s \
+  cairn/tests/test_compositional_research.py \
+  --basetemp=.claude/composition-example-new-run
+```
+
+每例的 `service.log`、独立 `cairn.db`、`run/` 和 `work/` 留在该测试目录中。查看 `run/result.json`、`audit.json`、`completions.json`、研究查询回执和规划记录即可复盘；测试按执行回执中的路径把导航及全文快照归档到 `graph-snapshots/`，成功时额外生成 `observation.json`。正例要求独立批准后 completed。反例还必须有 Explore 实际产出、经独立复核批准的新增事实，其证据覆盖写入、构造快照和读取端关键行，并被成功 no_candidate 结案明确引用；测试在内存中独立执行这份自有样例，核对共享状态更新而既有对象仍返回 before。反例最后为 budget_exhausted 且无完成批准；仅查询成功、调用全部失败或没有支持证据时不能通过。这些是该合成样例的验证条件，不作为通用产品 Fact 数量门槛。
+
+这是正常功能的静态状态衔接示例，验证材料交付和研究流程，不能据此宣称发现真实漏洞或保证高难度目标的研究效果。
+
 ## 原生进度、暂停与恢复
 
 在 Claude Code 中可以直接请求：
