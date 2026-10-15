@@ -33,6 +33,30 @@ def agent_graph_yaml(text: str) -> str:
     return text
 
 
+def graph_index(text: str) -> str:
+    graph = yaml.safe_load(text)
+    lines = ["# 研究图导航", "", "预览仅供定位，不能代替完整主张。按节点 ID 在同目录 graph.yaml 中读取全文。", "", "## Facts"]
+    for fact in graph.get("facts", []):
+        description = fact["description"].strip()
+        paragraph = description.split("\n\n", 1)[0]
+        preview = paragraph[:400]
+        audit = fact.get("audit") or {}
+        entry = {"id": fact["id"], "preview": preview,
+                 "truncated": preview != description,
+                 "conditions": audit.get("conditions", []),
+                 "review_status": audit.get("review_status"),
+                 "premise_ids": audit.get("premise_ids", [])}
+        lines.extend(["", "```json", json.dumps(entry, ensure_ascii=False, indent=2), "```"])
+    lines.extend(["", "## Open Intents"])
+    for intent in graph.get("intents", []):
+        if intent.get("to") is None:
+            lines.extend(["", json.dumps({key: intent.get(key) for key in ("id", "from", "description", "worker")}, ensure_ascii=False)])
+    lines.extend(["", "## Hints"])
+    for hint in graph.get("hints", []):
+        lines.extend(["", json.dumps({key: hint.get(key) for key in ("id", "content")}, ensure_ascii=False)])
+    return "\n".join(lines) + "\n"
+
+
 def material_paths(workspace: Path) -> dict[str, str]:
     context = json.loads((workspace / "input.json").read_text(encoding="utf-8"))
     return context.get("materials", {})

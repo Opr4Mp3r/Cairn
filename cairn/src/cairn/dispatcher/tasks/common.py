@@ -5,7 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from cairn.audit_inputs import agent_graph_yaml
+from cairn.audit_inputs import agent_graph_yaml, graph_index
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.protocol.client import CairnClient
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -63,6 +63,11 @@ def write_graph_snapshot_reference(
 ) -> str:
     path = f"{GRAPH_SNAPSHOT_ROOT}/{phase}-{uuid.uuid4().hex[:12]}/graph.yaml"
     container_manager.write_text_file(container_name, path, agent_graph_yaml(graph_yaml) if audit else graph_yaml)
+    if audit:
+        index_path = path.removesuffix("graph.yaml") + "graph-index.md"
+        container_manager.write_text_file(container_name, index_path, graph_index(graph_yaml))
+        return (f"Graph navigation: {index_path}\nFull graph: {path}\n"
+                "Navigation previews are incomplete; read original nodes, conditions and relevant Hints by ID.")
     return (
         "The graph YAML snapshot is stored in this task file:\n\n"
         f"{path}\n\n"

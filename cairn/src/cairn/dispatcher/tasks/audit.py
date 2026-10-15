@@ -44,7 +44,7 @@ def research_payload(project: ProjectDetail, text: str) -> dict:
 
 
 def research_receipt(backend, workspace: str, project: ProjectDetail, worker, *, phase: str, session, prompt: str, process,
-                     intent_id: str | None = None) -> None:
+                     intent_id: str | None = None) -> str | None:
     if project.project.mode != "audit":
         return
     folder = Path(workspace) / "research"
@@ -58,9 +58,11 @@ def research_receipt(backend, workspace: str, project: ProjectDetail, worker, *,
         "session": session, "prompt": prompt, "process": asdict(process),
         "note": "Raw execution receipt; exit code alone does not validate an audit claim.",
     }, ensure_ascii=False, indent=2))
+    return path
 
 
-def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, replacements: dict[str, str]) -> str:
+def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, replacements: dict[str, str], *,
+                    reason_memory: dict | None = None) -> str:
     if project.project.mode != "audit":
         return render_prompt(load_prompt(config.runtime.prompt_group, name), replacements)
     if config.controller is None or not config.controller.research_prompt_group or project.project.audit is None:
@@ -78,6 +80,8 @@ def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, r
         "verified_fact_ids": supported,
         "unverified_or_refuted": [fact.id for fact in project.facts if fact.id not in {"origin", "goal", *supported}],
     }
+    if reason_memory is not None:
+        context["reason_memory"] = reason_memory
     return render_prompt(load_prompt(config.controller.research_prompt_group, name),
                          {"intent_sources": "[]", **replacements, "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
 
@@ -156,6 +160,12 @@ def explore_result(project: ProjectDetail, payload: dict) -> tuple[str, str | No
 
 
 def reason_result(project: ProjectDetail, payload: dict, *, open_intents_empty: bool, max_intents: int):
+    if project.project.mode == "audit" and payload.get("accepted") is True and isinstance(payload.get("data"), dict):
+        data = dict(payload["data"])
+        if "planning_notes" in data:
+            if not isinstance(data.pop("planning_notes"), str):
+                raise ValueError("planning_notes must be a string")
+            payload = {**payload, "data": data}
     if project.project.mode == "audit" and payload.get("accepted") is not False:
         if payload.get("accepted") is not True or not isinstance(payload.get("data"), dict) or set(payload["data"]) - {"intents", "intent", "complete"}:
             raise ValueError("audit reason requires a strict action wrapper")
