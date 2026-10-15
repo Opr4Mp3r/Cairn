@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from cairn.dispatcher.config import DispatchConfig
 from cairn.audit_evidence import source_evidence, assert_repository_unchanged
-from cairn.audit_inputs import baseline_identity, material_paths
+from cairn.audit_inputs import baseline_identity
 from cairn.dispatcher.contracts import parse_json_output, validate_explore_payload, validate_reason_payload
 from cairn.dispatcher.output_parser import FENCED_BLOCK_RE
 from cairn.dispatcher.prompting import load_prompt, render_prompt
@@ -67,10 +67,14 @@ def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, r
         raise ValueError("audit research requires configured prompt group and metadata")
     metadata = project.project.audit
     supported = supported_fact_ids(project)
+    workspace_input = json.loads((Path(metadata.workspace_path) / "input.json").read_text()) if metadata.workspace_path else {}
     context = {
         "repo_path": metadata.repo_path, "policy": metadata.policy,
         "baseline": baseline_identity(metadata.baseline),
-        "materials": material_paths(Path(metadata.workspace_path)) if metadata.workspace_path else {},
+        "materials": workspace_input.get("materials", {}),
+        "kritt_query": workspace_input.get("kritt_query", {
+            "available": False, "reason": "此工作区尚未交付固定 Kritt 查询入口；仍可按任务读取源码。",
+        }),
         "verified_fact_ids": supported,
         "unverified_or_refuted": [fact.id for fact in project.facts if fact.id not in {"origin", "goal", *supported}],
     }

@@ -13,7 +13,7 @@ tasks:
     timeout: 120
     conclude_timeout: 30
   reason:
-    timeout: 120
+    timeout: 1800
   explore:
     timeout: 300
     conclude_timeout: 60

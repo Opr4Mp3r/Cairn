@@ -14,7 +14,7 @@ from cairn.controller.app import call_agent
 from cairn.controller.pool import run_pooled
 from cairn.audit_evidence import json_digest, repository_baseline, source_evidence, assert_repository_unchanged
 from cairn.audit_inputs import agent_view, READING_GUIDANCE
-from cairn.controller.kritt_query import write_json
+from cairn.controller.kritt_query import prepare_research_query, write_json
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.protocol.client import ApiResult, CairnClient
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -281,6 +281,7 @@ def prepare_audit(config: DispatchConfig, client: CairnClient, backend: LocalBac
     write_json(workspace / "input.json", {
         "project_id": project.project.id, "repo_path": metadata.repo_path,
         "policy_digest": metadata.policy_digest, "controller_run": str(run_dir), "materials": material_paths,
+        "kritt_query": prepare_research_query(workspace, context.get("kritt_query_context")),
     })
     summary["workspace"] = str(workspace)
     save_locator()

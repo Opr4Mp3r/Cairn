@@ -84,7 +84,7 @@ Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同�
 
 项目的 `.claude/skills/cairn-builder/` 是原生安装目录；`.claude/artifacts/cairn-builder.skill` 是分发包，不需要额外 MCP、插件框架或嵌套 Agent。薄脚本 `scripts/cairn.py` 从自己的位置定位仓库，使用 `cairn/.venv`，可从任意工作目录执行；只开放 prepare、submit、status、pause、resume，系统服务命令由用户直接在终端执行。
 
-Skill 在原会话中处理必要追问，并将问题和答复追加到本 run 的 `requirements.json`。目标应写清效果、部署、攻击者能力和范围；已给出的条件会被保留，未知项仍标为未知。取材只用于开题，适合源码理解、调用链/鉴权梳理、复核既有候选及进一步研究。当前没有统一的应用部署、动态 PoC 或正式漏洞报告生成器。
+Skill 在原会话中处理必要追问，并将问题和答复追加到本 run 的 `requirements.json`。目标应写清效果、部署、攻击者能力和范围；已给出的条件会被保留，未知项仍标为未知。开题取材建立初始方向，研究期间仍可查询同一固定视图，适合源码理解、调用链/鉴权梳理、复核既有候选及进一步研究。当前没有统一的应用部署、动态 PoC 或正式漏洞报告生成器。
 
 ## 准备与在线提交
 
@@ -124,6 +124,14 @@ uv run --project cairn cairn submit \
 | completed / budget_exhausted | 读取原结果与独立终审；系统服务继续在线 |
 
 已有 project 的 run 不重新建图；同 run 重提相同快照保持提交身份。源码、材料和配置的固定快照用于恢复，不在恢复时刷新 Kritt。
+
+## 研究期按需查询 Kritt
+
+审计项目首次激活或恢复时，程序向研究工作区交付固定 Kritt 查询入口。Reason／Explore 的审计上下文中，`kritt_query.command` 是当前环境可执行的完整命令，`examples` 提供 stdin JSON 示例；可用 describe、search、get 按需查询开题时未选中的入口、流程和 finding。get 使用 search 返回的完整 ref，材料及回执按返回路径读取。
+
+查询读取已提交的同一份 view，不连接最新 Kritt 数据库。工作区的 `kritt-context.json` 指向该固定视图，查询结果分别保存在 `research/kritt-queries/q-*/`，不会覆盖开题的 selected-materials 或查询汇总。新增材料仍是研究线索，不自动成为已验证 Fact。
+
+已有 input.json 的工作区在恢复时同样补齐入口；缺少固定查询材料时显示不可用原因，仍可继续读取源码。该能力只作用于使用新版代码激活或恢复的任务，不要求为现有研究重建项目。
 
 ## 原生进度、暂停与恢复
 
@@ -168,12 +176,14 @@ Reason 的 Complete 只是申请，Overseer 复核事实和方向，独立终审
 | controller.timeouts.preflight、seed_review | 240 |
 | controller.timeouts.overseer、closing | 180 |
 | controller.timeouts.final_review | 240 |
-| tasks.reason.timeout、tasks.explore.timeout | 120、300 |
+| tasks.reason.timeout、tasks.explore.timeout | 1800、300 |
 | controller.budget.research_seconds | 1800 |
 | controller.budget.drain_seconds | 120 |
 | controller.budget.final_review_seconds | 600 |
 
 build 时限只用于旧批处理 Builder，不限制原生会话问答。业务预算使用 Server 累计有效运行时间，暂停和停机冻结余额；审核轮次/单次窗口也使用同一业务时钟。CLI 调用超时与终止宽限仍按真实经过时间计时。当前没有 Token 总预算或准备阶段累计预算。
+
+审计示例的 Reason 单次上限为 1800 秒，使用现有 `tasks.reason.timeout`；其他角色、心跳租约和项目预算不随之改变。已有本地配置需要显式设置该值。新任务 prepare 会保存执行快照，submit 默认使用该快照；若 prepare 后才改 YAML，需在 submit 时用 `--config /path/to/task.yaml` 明确提交新配置。修改示例或重启服务不会热更新已有任务的执行快照，恢复原任务继续沿用其时限和余额。
 
 ## 保存结果与复盘
 

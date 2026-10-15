@@ -244,7 +244,7 @@ class ManagedService:
             conn.execute("UPDATE audit_submissions SET status='resuming',worker_token=NULL,error=NULL WHERE id=?", (key,))
 
     def _restore_workspace(self, config, prepared, project):
-        from cairn.controller.kritt_query import write_json
+        from cairn.controller.kritt_query import prepare_research_query, write_json
         metadata = project.project.audit
         workspace = Path(metadata.workspace_root) / project.project.id
         workspace.mkdir(parents=True, exist_ok=True)
@@ -261,6 +261,8 @@ class ManagedService:
                     "repo_path": metadata.repo_path, "policy_digest": metadata.policy_digest}.items()):
                 raise ValueError("Existing workspace context does not match this project")
             if "kritt-materials.json" in context.get("materials", {}) and all(Path(path).is_file() for path in context["materials"].values()):
+                context["kritt_query"] = prepare_research_query(workspace, prepared.get("query_context"))
+                write_json(context_path, context)
                 return
         materials = {"kritt-materials.json": prepared["materials"], "requirements.json": prepared["requirements"],
                      "references.json": prepared["references"], "query-receipts.json": prepared.get("query_receipts")}
@@ -275,7 +277,8 @@ class ManagedService:
             shutil.copyfile(path, destination)
             copied[name] = str(destination)
         write_json(context_path, {"project_id": project.project.id, "repo_path": metadata.repo_path,
-                   "policy_digest": metadata.policy_digest, "materials": copied})
+                   "policy_digest": metadata.policy_digest, "materials": copied,
+                   "kritt_query": prepare_research_query(workspace, prepared.get("query_context"))})
 
     @staticmethod
     def _restore_preparation(client, prepared, project_id):

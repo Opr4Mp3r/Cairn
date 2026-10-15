@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import sys
 import time
 import uuid
@@ -17,6 +18,28 @@ def write_json(path: Path, value) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def prepare_research_query(workspace: Path, context_path: str | None) -> dict:
+    """Reuse a submitted view, keeping research receipts outside its input snapshot."""
+    if context_path is None:
+        return {"available": False, "reason": "本项目没有固定 Kritt 查询材料；仍可按任务读取源码。"}
+    try:
+        context = json.loads(Path(context_path).read_text(encoding="utf-8"))
+        view = Path(context["view_path"]).resolve(strict=True)
+        if not view.is_file():
+            raise ValueError("fixed Kritt view is not a file")
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return {"available": False, "reason": f"固定 Kritt 查询材料不可用：{exc}；仍可按任务读取源码。"}
+    context.update(view_path=str(view), queries_dir=str(workspace / "research" / "kritt-queries"))
+    local_context = workspace / "kritt-context.json"
+    write_json(local_context, context)
+    return {
+        "available": True,
+        "command": shlex.join([sys.executable, "-m", "cairn.controller.kritt_query", "--context", str(local_context)]),
+        "usage": "向 stdin 输入 JSON。get 使用 search 返回的完整 ref 对象；按需读取返回的材料和回执路径。查询只读本次固定视图，不代表结论已验证。",
+        "examples": [{"action": "describe"}, {"action": "search", "kind": "flow", "terms": ["当前缺口的关键词"]}],
+    }
 
 
 def run_query(context_path: Path, request: dict) -> dict:
