@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from cairn.dispatcher.config import DispatchConfig
 from cairn.audit_evidence import source_evidence, assert_repository_unchanged
-from cairn.audit_inputs import baseline_identity, READING_GUIDANCE
+from cairn.audit_inputs import baseline_identity, fixed_contract, READING_GUIDANCE
 from cairn.dispatcher.contracts import parse_json_output, validate_explore_payload, validate_reason_payload
 from cairn.dispatcher.output_parser import FENCED_BLOCK_RE
 from cairn.dispatcher.prompting import load_prompt, render_prompt
@@ -68,33 +68,44 @@ def research_prompt(config: DispatchConfig, project: ProjectDetail, name: str, r
     if config.controller is None or not config.controller.research_prompt_group or project.project.audit is None:
         raise ValueError("audit research requires configured prompt group and metadata")
     metadata = project.project.audit
-    supported = supported_fact_ids(project)
     workspace_input = json.loads((Path(metadata.workspace_path) / "input.json").read_text()) if metadata.workspace_path else {}
     context = {
-        "repo_path": metadata.repo_path, "policy": metadata.policy,
+        "repo_path": metadata.repo_path,
+        "fixed_contract": fixed_contract(
+            next((fact.description for fact in project.facts if fact.id == "goal"), ""),
+            metadata.policy, metadata.user_goal,
+        ),
         "baseline": baseline_identity(metadata.baseline),
         "materials": workspace_input.get("materials", {}),
         "kritt_query": workspace_input.get("kritt_query", {
             "available": False, "reason": "此工作区尚未交付固定 Kritt 查询入口；仍可按任务读取源码。",
         }),
-        "verified_fact_ids": supported,
-        "unverified_or_refuted": [fact.id for fact in project.facts if fact.id not in {"origin", "goal", *supported}],
     }
+    if name == "reason.md":
+        context["candidate_fact_ids"] = candidate_fact_ids(project)
     if reason_memory is not None:
         context["reason_memory"] = reason_memory
     return render_prompt(READING_GUIDANCE + "\n\n" + load_prompt(config.controller.research_prompt_group, name),
-                         {"intent_sources": "[]", **replacements, "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
+                         {"intent_sources": "[]", **replacements,
+                          "goal": "见固定任务契约 fixed_contract.goal。",
+                          "audit_context": json.dumps(context, ensure_ascii=False, indent=2)})
 
 
-def supported_fact_ids(project: ProjectDetail) -> list[str]:
+def candidate_fact_ids(project: ProjectDetail) -> list[str]:
+    """Return structurally usable candidates, without judging their evidence."""
     supported = {"origin"}
-    remaining = [fact for fact in project.facts if fact.id not in ("origin", "goal") and fact.audit and fact.audit.review_status == "verified"]
+    remaining = [fact for fact in project.facts if fact.id not in ("origin", "goal") and fact.audit and fact.audit.review_status != "refuted"]
     for _ in remaining:
         added = {fact.id for fact in remaining if set(fact.audit.premise_ids) <= supported}
         if added <= supported:
             break
         supported.update(added)
     return [fact.id for fact in project.facts if fact.id in supported and fact.id != "origin"]
+
+
+def supported_fact_ids(project: ProjectDetail) -> list[str]:
+    """Compatibility name; membership is not an independent evidence verdict."""
+    return candidate_fact_ids(project)
 
 
 def research_workspace(config: DispatchConfig, client, backend, project: ProjectDetail) -> str:
@@ -181,8 +192,8 @@ def reason_result(project: ProjectDetail, payload: dict, *, open_intents_empty: 
             raise ValueError("unknown or goal source in audit intent")
         return kind, [intent.model_dump(by_alias=True) for intent in intents]
     complete = CompleteRequest.model_validate({**data, "worker": "reason"}, strict=True)
-    if not set(complete.from_) <= set(supported_fact_ids(project)):
-        raise ValueError("audit completion cannot depend on unsupported facts")
+    if not set(complete.from_) <= set(candidate_fact_ids(project)):
+        raise ValueError("audit completion requires non-refuted facts with a valid premise closure")
     return kind, {"from": complete.from_, "description": complete.description}
 
 

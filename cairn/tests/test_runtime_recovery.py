@@ -45,7 +45,8 @@ def active(audit, monkeypatch):
 def settle_to(audit, elapsed):
     with db.get_conn() as conn:
         data = runtime.load(conn, audit[3])
-        data.update(elapsed=elapsed, anchor=runtime.monotonic(), valid_until=runtime.monotonic()+10)
+        data.update(elapsed=elapsed, anchor=runtime.monotonic(),
+                    valid_until=runtime.monotonic()+runtime.LEASE_SECONDS)
         runtime.save(conn, audit[3], data)
 
 
@@ -101,11 +102,45 @@ def test_restart_drops_previous_monotonic_anchor_and_requires_resume(active, mon
 def test_missed_heartbeat_caps_time_and_rejects_calls(active):
     audit, now = active
     now[0] += 24*3600
-    assert audit[0].get_runtime(audit[3])["elapsed_seconds"] == 10
+    assert audit[0].get_runtime(audit[3])["elapsed_seconds"] == runtime.LEASE_SECONDS
     with db.get_conn() as conn:
         runtime.heartbeat(conn)
     assert audit[0].get_runtime(audit[3])["state"] == "interrupted"
     assert audit[0].create_intent(audit[3], ["f001"], "expired call", "old").status_code == 409
+
+
+@pytest.mark.parametrize("gap", [2, 8, 10.04, 15, 59.9])
+def test_delayed_heartbeat_renews_without_interrupting_or_resetting_budget(active, caplog, gap):
+    audit, now = active
+    now[0] += gap
+    with db.get_conn() as conn:
+        runtime.require_running(conn, audit[3])
+        runtime.heartbeat(conn)
+        data = runtime.load(conn, audit[3])
+        assert conn.execute("SELECT status FROM projects WHERE id=?", (audit[3],)).fetchone()[0] == "active"
+    assert data["state"] == "running" and data["generation"] == 1
+    assert data["elapsed"] == pytest.approx(gap)
+    assert data["valid_until"] == pytest.approx(now[0] + 60)
+    assert not any(event["event"] == "interrupted" for event in data["history"])
+    warnings = [record for record in caplog.records if "runtime heartbeat delayed" in record.message]
+    assert len(warnings) == (1 if gap >= 10 else 0)
+
+
+@pytest.mark.parametrize("gap", [60, 61])
+def test_hard_lease_expiry_still_requires_explicit_resume(active, gap):
+    audit, now = active
+    now[0] += gap
+    with db.get_conn() as conn:
+        with pytest.raises(HTTPException) as expired:
+            runtime.require_running(conn, audit[3])
+        assert expired.value.status_code == 409
+        runtime.heartbeat(conn)
+        data = runtime.load(conn, audit[3])
+    assert data["state"] == "interrupted" and data["elapsed"] == 60
+    now[0] += 2
+    with db.get_conn() as conn:
+        runtime.heartbeat(conn)
+        assert runtime.load(conn, audit[3])["state"] == "interrupted"
 
 
 def test_wall_clock_changes_do_not_change_business_budget(active, monkeypatch):

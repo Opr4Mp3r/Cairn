@@ -126,7 +126,7 @@ def test_external_preflight_rejection_can_be_revised_in_same_run_with_no_revisio
     assert json.loads(rejection_receipt.read_text())["data"]["issues"] == issues
     recorded = [json.loads(line) for line in calls.read_text().splitlines()]
     prompts = [json.loads(call["argv"][-1].rsplit("\n\n", 1)[1]) for call in recorded[:3]]
-    assert prompts[1]["plan"]["goal"] == plan["goal"]
+    assert prompts[1]["fixed_contract"]["goal"] == plan["goal"]
     assert all("-r" not in call["argv"] for call in recorded[:3])
     assert json.loads((folder / "research.json").read_text())["project_status"] == "stopped"
 
@@ -175,7 +175,7 @@ if '"output_schema"' in prompt:
         result = {"reviews": [{"key": seed["key"], "audit": {"review_status": "verified",
             "evidence": [{"path": "module/install/control.php", "start_line": 2}],
             "conditions": ["仅源码观察"], "validation_level": "source_analysis"}}
-            for seed in context["plan"]["seeds"]]}
+            for seed in context["seeds"]]}
     else:
         result = {"decision": "approved", "reason": "synthetic review", "fact_audit": None, "hint": None}
     print(json.dumps(result))

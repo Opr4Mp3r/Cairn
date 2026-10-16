@@ -63,13 +63,13 @@ if '"output_schema"' in prompt:
     context = json.loads(prompt.rsplit("\n\n", 1)[1])
     props = context["output_schema"].get("properties", {})
     if "approved" in props:
-        issues = ["keep the static deployment uncertainty"] if context["plan"]["goal"] == "revise-me" else []
+        issues = ["keep the static deployment uncertainty"] if context["fixed_contract"]["goal"] == "revise-me" else []
         answer = {"approved": not issues, "issues": issues}
     elif "reviews" in props:
         answer = {"reviews": [{"key": seed["key"], "audit": {
             "review_status": "verified", "evidence": [{"path": "module/install/control.php", "start_line": 2}],
             "conditions": ["synthetic static source"], "validation_level": "source_analysis"}}
-            for seed in context["plan"]["seeds"]]}
+            for seed in context["seeds"]]}
     else:
         target = context.get("target", {})
         answer = {"decision": "approved", "reason": "synthetic review", "hint": None,

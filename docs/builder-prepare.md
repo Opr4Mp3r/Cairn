@@ -46,11 +46,11 @@ export CAIRN_KRITT_READONLY_DSN='host=127.0.0.1 port=5433 dbname=open_kritt user
 
 Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及在线提交所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；纯客户端随任务提交资源池快照。恢复已有任务跳过资源池问答，沿用它保存的配置和余额；本轮不热更新。
 
-资源池用于 `runtime.execution: local`。在顶层 `role_pools` 中为每个角色填写可用 harness 及数量。示例默认所有角色各用一个 `claudecode`；若本机 `claude`、`grok` 均已登录并可调用，可这样配置：
+资源池用于 `runtime.execution: local`。可选 `claudecode`、`grok`、`pi`、`codex`，对应本机命令 `claude`、`grok`、`pi`、`codex`；研究与 Controller 角色共用这些适配器。示例默认所有角色各用一个 `claudecode`；所选 CLI 已在启动 Cairn 的终端 PATH 中可用且完成登录／模型配置时，可混用：
 
 ```yaml
 role_pools:
-  explore: {claudecode: 3, grok: 2}
+  explore: {claudecode: 2, grok: 1, pi: 1, codex: 1}
   reason: {claudecode: 1}
   preflight: {claudecode: 1}
   seed_review: {claudecode: 1}
@@ -59,16 +59,18 @@ role_pools:
   final_review: {claudecode: 1}
 ```
 
-Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同时启动三个 Claude Code 和两个 Grok CLI。数量按角色、按项目分别计算；相同 harness 在不同角色池中的名额独立。名额表示可同时执行的任务数，任务结束即释放，不预先启动常驻 Agent。
+Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同时启动两个 Claude Code，以及 Grok、Pi、Codex 各一个 CLI。数量按角色、按项目分别计算；相同 harness 在不同角色池中的名额独立。名额表示可同时执行的任务数，任务结束即释放，不预先启动常驻 Agent。
 
 | 角色 | 同一项目的执行方式 |
 |---|---|
 | Explore | 不同 Intent 并行，结果写回同一任务图 |
 | Seed Review | 将种子拆成小批并行复核，全部汇总后继续 |
-| Overseer | 不同事实或研究方向并行复核 |
+| Overseer | 并行观察不同未结 Intent，必要时发 Hint 纠偏；不逐条复核 Fact |
 | Reason、Preflight、Closing、Final Review | 各角色保持串行，池用于选择执行者 |
 
-原生 Builder 使用当前 Claude Code 会话，不在后台资源池中。新任务使用独立 session；同一任务需要续接时保持原 harness 与 session。各 harness 的模型、provider 和登录由用户通过 CCSwitch 或本机 CLI 管理，`role_pools` 不配置 `model`。
+原生 Builder 使用当前 Claude Code 会话，不在后台资源池中。后台每次任务使用独立 session；同次调用的格式修复或 Explore 收尾使用原 harness 与 session。服务中断后的项目恢复沿用原图和资源池，为未完成 Intent 新建 session。各 harness 的模型、provider 和登录由用户通过 CCSwitch 或本机 CLI 管理，`role_pools` 不配置 `model`。
+
+可先在启动 Cairn 的终端运行所选命令的 `--help` 确认安装和 PATH；它不验证账号或模型可用性。Pi 指 Pi Coding Agent 的 `pi` 命令；Codex 指 Codex CLI 的 `codex` 命令。Cairn 以非交互模式调用它们，沿用本机配置，不安装 CLI 或改写全局登录、模型与代理设置。
 
 容量直接等于该角色各 harness 数量之和，没有额外的角色总并发字段。资源池模式自动生成内部 Worker 和调度容量，无需再写 `workers`、`controller.roles`、`runtime.max_workers` 或 `runtime.max_project_workers`；`runtime.max_running_projects` 仍控制同时运行的项目数，示例保留为 `1`。
 
@@ -137,13 +139,30 @@ uv run --project cairn cairn submit \
 
 ## 组合研究与规划记忆
 
-Reason 先读取 `graph-index.md` 导航，再按当前缺口打开完整 `graph.yaml`、Kritt 材料和源码。导航保留条件、验证状态和逻辑前提；截断预览仅供定位，旧 Fact 不被改写。Explore 的结论先写带关键条件的主要观察，再保留对象、作用范围、生效时序和未知项。
+每次审计调用由程序交付一份固定任务契约（原 Goal、完整 policy，及尚需保留的用户约束）；图节点、Hint 和规划记忆不能重新定义它。模型读取的是当前调用的派生视图，数据库中的历史节点与原始记录保持原样。
 
-桥接研究需要解释“前一步执行后的状态如何满足后一步”，分别验证的两个机制不自动组成有效路径。`verified` 支持的是声明的条件命题，是否符合当前部署及 Goal 还需判断。正常功能、低排名材料和无 finding 流程都可用于寻找互补条件；未确认观察也可用于安排验证，普通探索不等待逐条复核，完成申请仍经过独立终审。
+`graph-index.md` 提供节点预览、状态、来源／前提 ID 及 `graph.yaml` 中完整节点的行范围；导航不展开证据清单和全部条件。旧长描述显示为节选，不自动语义改写；引用或组合前应按行号打开完整节点和 conditions。`graph.yaml` 保留研究语义与原文，程序内部哈希、租约和运行指纹由原始记录保存。
+
+| 角色 | 默认上下文与按需展开 |
+| --- | --- |
+| Builder | 用户需求、Goal／policy 草案和材料入口，按缺口读已选材料、Kritt 和源码 |
+| Preflight／Seed review | 预审先看契约、来源身份和计划概览；种子复核只内联本批种子，其他材料沿计划入口读取 |
+| Reason | 先读一次全图短导航和最新规划，再展开候选连接、冲突及反证；不重复内联全部开放任务 |
+| Explore | 当前 Intent、直接来源 ID 和全文入口、Hint 导航；需要互补条件时自主扩大到其他分支 |
+| Overseer | 未结 Intent 及来源 ID；沿导航按需读取 Fact 或已有材料，检查方向、条件和 Goal 漂移 |
+| Closing／Final review | Closing 覆盖全图寻找候选；终审先读申请及必要前提闭包，再查看申请外的反证与限制 |
+
+这些范围控制默认交付，不限制 Agent 按需读相关材料。Explore conclude 沿用原 session，只总结已有观察，不重新注入全图或研究历史。
+
+新 Fact 的首段写可复用的条件性结论，保留决定能否衔接的身份、对象、作用范围、状态／时序及未知；conditions 列必要条件，review_notes 补反证、缺口和材料入口。详细代码分析、命令、响应和实验对照按需留在工作目录，简单观察不要求另写报告。新 Intent 说明待查问题、关键边界和判别观察，不复制前序报告或通用规则，也不预设局部效果等于完整 Goal 达成。
+
+桥接研究需要解释“前一步执行后的状态如何满足后一步”，分别验证的两个机制不自动组成有效路径。`verified` 支持的是声明的条件命题，是否符合当前部署及 Goal 还需判断。正常功能、低排名材料和无 finding 流程都可用于寻找互补条件；未确认观察也可用于安排研究。Reason／Closing 可将结构合法、非 refuted 的 unverified 候选提交独立终审，不要求先取得 verified 标签，也不因此生成机械复核任务。终审独立核验候选及必要前提，不等待无关节点认证、不批量升级 Fact 标签；缺工具、材料或必要条件时不能批准。
 
 审计 Reason 可返回 `planning_notes` 保存已考虑的连接、暂搁原因、重开条件和下一步重点。程序把有效成功的备注保存在工作区 `research/generation-*/reason-memory-*.json`，下一轮提供最近规划及最近失败原因的简要记录和回执路径。它不进入 Fact、不改变审核状态，也不触发新一轮 Reason；无需增加配置。旧输出不含备注时继续兼容。暂停或恢复后以当前图、Hint 和 policy 为准，不把旧备注当作证据。
 
-后台 claudecode 调用使用 CLI 原生 JSON 结果信封和每次调用的最终格式指引，adapter 只解包 `result`，上层继续严格校验业务 JSON。原始信封仍留在调用回执中；CLI 执行失败不会被当成有效回答。源码版本与文件指纹由程序核验，归档源码没有 Git 元数据时，不以外层 Cairn 仓库 HEAD 替代目标版本。
+后台 claudecode 调用使用 CLI 原生 JSON 结果信封和每次调用的最终格式指引，adapter 只解包 `result`，上层继续严格校验业务 JSON。原始信封仍留在调用回执中；CLI 执行失败不会被当成有效回答。源码证据只需填写路径与行号，hash 由程序补齐；引用与基线匹配不代表研究主张已经成立。实验实际依赖的版本／内容确实影响结论时，Agent 仍可按需核对，细节保存在材料中。Kritt 完整 ref 继续按工具协议使用。归档源码没有 Git 元数据时，不以外层 Cairn 仓库 HEAD 替代目标版本。
+
+Monitor 空轮和 Intent Overseer 不做全量源码扫描；旁路不调用可能停止项目的 `research_workspace`。实际 Closing／Final Review 调用前后、复用已保存 Closing 候选首次提交前仍检查固定源码。研究调用、准备、激活、恢复、证据保存及最终批准的现有保护保留。因此空闲期的源码变化可能到下一次研究或结案工作边界才被发现；不会因减少输入元数据而允许混用版本。
 
 ## 隔离的组合研究样例
 
@@ -163,7 +182,7 @@ CAIRN_COMPOSITION_REAL_CLAUDE=1 uv run --project cairn pytest -s \
   --basetemp=.claude/composition-example-new-run
 ```
 
-每例的 `service.log`、独立 `cairn.db`、`run/` 和 `work/` 留在该测试目录中。查看 `run/result.json`、`audit.json`、`completions.json`、研究查询回执和规划记录即可复盘；测试按执行回执中的路径把导航及全文快照归档到 `graph-snapshots/`，成功时额外生成 `observation.json`。正例要求独立批准后 completed。反例还必须有 Explore 实际产出、经独立复核批准的新增事实，其证据覆盖写入、构造快照和读取端关键行，并被成功 no_candidate 结案明确引用；测试在内存中独立执行这份自有样例，核对共享状态更新而既有对象仍返回 before。反例最后为 budget_exhausted 且无完成批准；仅查询成功、调用全部失败或没有支持证据时不能通过。这些是该合成样例的验证条件，不作为通用产品 Fact 数量门槛。
+每例的 `service.log`、独立 `cairn.db`、`run/` 和 `work/` 留在该测试目录中。查看 `run/result.json`、`audit.json`、`completions.json`、研究查询回执和规划记录即可复盘；测试按执行回执中的路径把导航及全文快照归档到 `graph-snapshots/`，成功时额外生成 `observation.json`。正例要求独立批准后 completed。反例还必须有 Explore 实际产出、支持阻断判断的新增事实，其证据覆盖写入、构造快照和读取端关键行，并被成功 no_candidate 结案明确引用；测试在内存中独立执行这份自有样例，核对共享状态更新而既有对象仍返回 before。反例最后为 budget_exhausted 且无完成批准；仅查询成功、调用全部失败或没有支持证据时不能通过。这些是该合成样例的验证条件，不作为通用产品 Fact 数量门槛。
 
 这是正常功能的静态状态衔接示例，验证材料交付和研究流程，不能据此宣称发现真实漏洞或保证高难度目标的研究效果。
 
@@ -200,7 +219,9 @@ runtime 展示实际 state、audit_phase、Server 剩余预算、角色池和占
 | budget_exhausted | 预算结束并保存成果，不表示证明不存在风险 |
 | paused / interrupted / blocked | 原任务暂停、中断或恢复受阻，图与余额保留 |
 
-Reason 的 Complete 只是申请，Overseer 复核事实和方向，独立终审决定完成。draining 停止新 Explore，再用最终图走有界结案，不重新分配研究预算。
+Reason 的 Complete 只是申请，独立终审核验候选及必要前提并决定完成。运行期 Overseer 在独立旁路只观察未结 Intent，正常方向不发 Hint；纠偏通过 Hint 在后续读取时生效，不修改 Fact、不取消 Intent、不阻塞 Explore、Reason 或收尾。并发数表示观察不同 Intent 的容量，不是同一结论的多票审核，无需与 Explore 数量相等。
+
+完成申请 pending 仍会暂停新研究派发，这是独立终审阶段；不等待普通旁路批次完成。draining 停止新 Explore，再用最终图走有界结案，不重新分配研究预算。开题 Seed review 保留。历史 verified／refuted 和审核记录仍可追溯，不因旁路职责调整而重写。
 
 ## 时间配置
 

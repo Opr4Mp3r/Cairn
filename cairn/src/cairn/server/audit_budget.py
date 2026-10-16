@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 
 from fastapi import HTTPException
@@ -28,21 +27,6 @@ def closing_input(metadata) -> str:
 
 def closing_current(metadata) -> bool:
     return metadata.closing.status == "success" and metadata.closing.input_digest == closing_input(metadata)
-
-
-def facts_reviewed(conn, metadata) -> bool:
-    from cairn.server.audit_review import node_input
-
-    records = [json.loads(row["record_json"]) for row in conn.execute(
-        "SELECT record_json FROM audit_records WHERE project_id=? AND phase='overseer' AND object_type='fact'",
-        (metadata.project_id,),
-    )]
-    for row in conn.execute("SELECT fact_id FROM audit_facts WHERE project_id=?", (metadata.project_id,)):
-        digest = json_digest(node_input(conn, metadata, "fact", row["fact_id"]))
-        if not any(record["object_id"] == row["fact_id"] and record["attempt_status"] == "success"
-                   and digest in (record["input_digest"], record.get("output_digest")) for record in records):
-            return False
-    return True
 
 
 def advance_budget(conn, project_id: str, *, finalize: bool = False):
@@ -83,7 +67,7 @@ def advance_budget(conn, project_id: str, *, finalize: bool = False):
             closing.result.kind == "no_candidate" or any(request["id"] == closing.request_id for request in requests)
         )
         settled = all(request["status"] in ("approved", "rejected", "needs_evidence") for request in requests)
-        if closing_current(metadata) and submitted and settled and facts_reviewed(conn, metadata):
+        if closing_current(metadata) and submitted and settled:
             metadata.phase = "closed"
             metadata.termination_reason = "research_budget_exhausted"
             conn.execute("UPDATE projects SET status='budget_exhausted' WHERE id=?", (project_id,))
@@ -154,8 +138,8 @@ def control_window(conn, metadata) -> None:
 def claim_closing(conn, metadata, body):
     metadata = advance_budget(conn, metadata.project_id)
     control_window(conn, metadata)
-    if metadata.phase != "finalizing" or not facts_reviewed(conn, metadata):
-        raise HTTPException(409, "Final source observations must be reviewed before closing")
+    if metadata.phase != "finalizing":
+        raise HTTPException(409, "Closing requires the finalizing phase")
     closing = metadata.closing
     clock = runtime.BudgetClock(conn, metadata)
     now = clock.now
@@ -183,7 +167,7 @@ def claim_closing(conn, metadata, body):
 
 
 def finish_closing(conn, metadata, body):
-    from cairn.server.audit_review import store_record, premise_closure, facts_snapshot
+    from cairn.server.audit_review import store_record, candidate_closure, facts_snapshot
 
     existing = conn.execute("SELECT record_json FROM audit_records WHERE project_id=? AND record_key=?",
                             (metadata.project_id, body.record.record_key)).fetchone()
@@ -208,7 +192,7 @@ def finish_closing(conn, metadata, body):
         if not matched:
             raise HTTPException(400, "Closing result must match its execution receipt")
     if success and body.result.kind == "candidate":
-        premise_closure(facts_snapshot(conn, metadata.project_id), body.result.from_)
+        candidate_closure(facts_snapshot(conn, metadata.project_id), body.result.from_)
     store_record(conn, metadata.project_id, body.record)
     closing.status = "success" if success else "error"
     closing.result = body.result

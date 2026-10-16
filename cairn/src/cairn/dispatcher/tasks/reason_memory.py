@@ -29,9 +29,11 @@ def load_memory(project, workspace: str) -> dict:
     context = {"note": "可修订规划记忆，不是事实；以当前图、Hint 和固定 policy 为准。"}
     for _, record, path in records:
         if record.get("outcome") == "success" and record.get("planning_notes") and "previous_plan" not in context:
-            context["previous_plan"] = {**record, "memory_path": path}
+            context["previous_plan"] = {key: record.get(key) for key in ("planning_notes", "reason_started_at", "receipt_path")}
+            context["previous_plan"]["memory_path"] = path
         elif record.get("outcome") not in (None, "success") and "last_failure" not in context:
-            context["last_failure"] = {**record, "memory_path": path}
+            context["last_failure"] = {key: record.get(key) for key in ("reason_started_at", "receipt_path")}
+            context["last_failure"].update(error=record.get("error") or record["outcome"], memory_path=path)
         if "previous_plan" in context and "last_failure" in context:
             break
     return context

@@ -53,6 +53,13 @@ DEFAULT_PROMPT_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
 }
 
 PROMPT_REQUIRED_TOKENS_BY_GROUP: dict[str, dict[str, tuple[str, ...]]] = {
+    "audit": {
+        "reason.md": ("{graph_yaml}", "{fact_ids}", "{max_intents}", "{audit_context}"),
+        "explore.md": ("{graph_yaml}", "{intent_id}", "{intent_description}", "{intent_sources}", "{audit_context}"),
+        "explore_conclude.md": ("{intent_id}", "{intent_description}", "{intent_sources}", "{audit_context}"),
+        "bootstrap.md": ("{origin}", "{graph_yaml}", "{intent_id}", "{intent_description}", "{intent_sources}", "{hints}", "{audit_context}"),
+        "bootstrap_conclude.md": ("{origin}", "{graph_yaml}", "{intent_id}", "{intent_description}", "{intent_sources}", "{hints}", "{audit_context}"),
+    },
     "mock": {
         "reason.md": ("{fact_ids}", "{open_intents}", "{max_intents}"),
         "explore.md": ("{intent_id}",),

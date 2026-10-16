@@ -14,7 +14,7 @@ from cairn.server.models import (
 )
 from cairn.server.services import (
     audit_metadata, bump_audit_revision, check_project_active, clear_project_reason,
-    expire_reason_leases, expire_workers, get_project_or_404, json_text,
+    expire_reason_leases, expire_workers, get_project_or_404, has_pending_completion, json_text,
     next_hint_id, next_intent_id, next_review_id, utcnow,
 )
 from cairn.server.audit_budget import control_window, existing_research
@@ -63,6 +63,13 @@ def premise_closure(facts: dict, sources: list[str]) -> dict:
     for source in sources:
         visit(source)
     return result
+
+
+def candidate_closure(facts: dict, sources: list[str]) -> dict:
+    closure = premise_closure(facts, sources)
+    if any(fact["audit"].review_status == "refuted" for fact in closure.values()):
+        raise HTTPException(409, "Proof depends on a refuted premise; submit a new supported claim")
+    return closure
 
 
 def proof_digest(conn, metadata: AuditMetadata, sources: list[str]) -> str:
@@ -188,6 +195,13 @@ def apply_node_review(conn, metadata: AuditMetadata, body: AuditRecordRequest) -
                                  (json_text(dependent.model_dump(mode="json")), metadata.project_id, key))
     elif body.fact_audit is not None:
         raise HTTPException(400, "Intent review cannot change a fact")
+    if body.object_type == "intent" and body.hint:
+        intent = conn.execute("SELECT to_fact_id FROM intents WHERE project_id=? AND id=?",
+                              (metadata.project_id, body.object_id)).fetchone()
+        if (intent is None or intent["to_fact_id"] is not None
+                or get_project_or_404(conn, metadata.project_id)["status"] != "active"
+                or metadata.phase != "researching" or has_pending_completion(conn, metadata.project_id)):
+            raise HTTPException(409, "Intent Hint is no longer applicable to active research")
     if body.hint:
         if not body.hint.strip():
             raise HTTPException(400, "Hint must not be blank")
@@ -259,6 +273,7 @@ def create_completion(conn, metadata: AuditMetadata, body: CompleteRequest, *, c
             existing_research(conn, metadata.project_id, scope, body.worker, body.lease_id)
     if len(body.from_) != len(set(body.from_)) or set(body.from_) & {"origin", "goal"}:
         raise HTTPException(400, "Completion requires unique ordinary proof facts")
+    candidate_closure(facts_snapshot(conn, metadata.project_id), body.from_)
     digest = proof_digest(conn, metadata, body.from_)
     source_key = json_digest({"policy": metadata.policy_digest, "baseline": metadata.baseline,
                               "facts": sorted(body.from_)})
@@ -369,9 +384,7 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
             assert_repository_unchanged(Path(metadata.repo_path), metadata.baseline, Path(metadata.workspace_root))
         except (OSError, ValueError, RuntimeError) as exc:
             raise HTTPException(409, f"Baseline cannot support approval: {exc}") from exc
-        closure = premise_closure(facts_snapshot(conn, metadata.project_id), request.from_)
-        if any(fact["audit"].review_status != "verified" for fact in closure.values()):
-            raise HTTPException(409, "Proof depends on an unsupported premise")
+        closure = candidate_closure(facts_snapshot(conn, metadata.project_id), request.from_)
         for fact in closure.values():
             validate_fact_evidence(metadata, fact["audit"])
         control_window(conn, metadata)

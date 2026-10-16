@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from contextvars import ContextVar
 import json
+import logging
 import time
 import uuid
 
@@ -11,8 +12,10 @@ from fastapi import HTTPException
 
 INSTANCE = uuid.uuid4().hex
 HEARTBEAT_SECONDS = 2
-LEASE_SECONDS = 10
+HEARTBEAT_WARNING_SECONDS = 10
+LEASE_SECONDS = 60
 REQUEST_FENCE = ContextVar("cairn_request_fence", default=None)
+LOG = logging.getLogger(__name__)
 
 
 def check_request(conn):
@@ -130,10 +133,15 @@ def heartbeat(conn):
             continue
         if data["state"] == "pausing" and data["valid_until"] is None:
             continue  # Preparing/resuming has not acquired a running-time lease.
-        if data["instance"] != INSTANCE or monotonic() >= data["valid_until"]:
+        now = monotonic()
+        if data["instance"] != INSTANCE or now >= data["valid_until"]:
             freeze(conn, row[0], "interrupted", "Runtime heartbeat expired")
             conn.execute("UPDATE projects SET status='stopped' WHERE id=? AND status IN ('active','draining')", (row[0],))
         else:
+            gap = now - (data["valid_until"] - LEASE_SECONDS)
+            if gap >= HEARTBEAT_WARNING_SECONDS:
+                LOG.warning("runtime heartbeat delayed project=%s generation=%s gap=%.3fs lease_remaining=%.3fs",
+                            row[0], data["generation"], gap, data["valid_until"] - now)
             settle(data)
             data["valid_until"] = monotonic() + LEASE_SECONDS
             data["last_heartbeat_at"] = datetime.now(timezone.utc).isoformat()

@@ -13,7 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from cairn.controller.app import call_agent
 from cairn.controller.pool import run_pooled
 from cairn.audit_evidence import json_digest, repository_baseline, source_evidence, assert_repository_unchanged
-from cairn.audit_inputs import agent_view, READING_GUIDANCE
+from cairn.audit_inputs import (
+    agent_view, baseline_identity, fact_view, fixed_contract, model_output_schema, node_preview, READING_GUIDANCE,
+)
 from cairn.controller.kritt_query import prepare_research_query, write_json
 from cairn.dispatcher.config import DispatchConfig
 from cairn.dispatcher.protocol.client import ApiResult, CairnClient
@@ -121,11 +123,63 @@ def _require_ok(response: ApiResult, action: str):
     return response.data
 
 
+def _plan_payload(phase: str, context: dict, folder: Path) -> dict:
+    """Keep opening material available while handing each reviewer its own work."""
+    plan = context["plan"]
+    projected_plan = {**plan, "seeds": [
+        {"key": seed["key"], **fact_view(seed)} for seed in plan["seeds"]
+    ]}
+    plan_path = folder / "plan.json"
+    write_json(plan_path, projected_plan)
+    payload = {
+        "fixed_contract": fixed_contract(plan["goal"], plan["policy"], context.get("user_goal")),
+        "repo_path": context["repo_path"], "baseline": baseline_identity(context["baseline"]),
+        "plan_reference": str(plan_path),
+        **{key: context[key] for key in (
+            "requirements_path", "reference_paths", "references_path", "materials",
+            "repo_full", "scan_id", "commit_sha", "kritt_query_command", "preflight_issues",
+        ) if key in context},
+    }
+    if phase == "seed_review":
+        keys = context.get("review_keys", [seed["key"] for seed in plan["seeds"]])
+        payload.update(origin=plan["origin"], review_keys=keys,
+                       seeds=[seed for seed in projected_plan["seeds"] if seed["key"] in keys],
+                       other_seed_keys=[seed["key"] for seed in plan["seeds"] if seed["key"] not in keys])
+    else:
+        payload["plan_overview"] = {
+            "title": plan["title"], "origin": plan["origin"],
+            "seeds": [{"key": seed["key"], **node_preview(seed["description"])} for seed in plan["seeds"]],
+            "intents": [{"from": intent["from"], **node_preview(intent["description"])} for intent in plan["intents"]],
+        }
+    return payload
+
+
+def _continuation_context(context: dict) -> dict:
+    """A resumed session still receives its contract and original requirement entry."""
+    retained = {key: context[key] for key in (
+        "fixed_contract", "requirements_path", "reference_paths", "references_path",
+        "plan_reference", "preflight_issues",
+    ) if key in context}
+    if "fixed_contract" not in retained and "user_goal" in context:
+        retained["user_goal"] = context["user_goal"]
+    return retained
+
+
 def _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts, cancellation,
            phase: str, role: str, model: type[BaseModel], context: dict, *, session=None, worker=None):
     instruction = resources.files("cairn.controller").joinpath(f"prompts/{phase}.md").read_text(encoding="utf-8")
     instruction += "\n" + READING_GUIDANCE
-    payload = {**agent_view(context), "output_schema": model.model_json_schema(by_alias=True)}
+    # Preserve the raw record separately; projection must never alter source data.
+    context_dir = run_dir / f"{len(receipts) + 1:02d}-{phase}"
+    context_dir.mkdir()
+    write_json(context_dir / "raw-context.json", context)
+    if phase in {"preflight", "seed_review"} or (phase == "build" and "plan" in context):
+        payload = _plan_payload(phase, context, context_dir)
+    else:
+        payload = agent_view(context)
+        if phase == "build" and "input_seeds" in context:
+            payload["input_seeds"] = [fact_view(seed) for seed in context["input_seeds"]]
+    payload["output_schema"] = model_output_schema(model.model_json_schema(by_alias=True))
     if phase == "seed_review":
         all_keys = [seed["key"] for seed in context["plan"]["seeds"]]
         keys = context.get("review_keys", all_keys)
@@ -143,7 +197,8 @@ def _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts, c
         if remaining <= 0:
             raise ValueError(f"{phase} deadline exhausted; receipts: {run_dir}")
         folder = run_dir / f"{len(receipts) + 1:02d}-{name}"
-        folder.mkdir()
+        if attempt:
+            folder.mkdir()
         prompt = instruction + "\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
         (folder / "input.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
@@ -171,7 +226,7 @@ def _stage(config, backend, repo, workspace_root, baseline, run_dir, receipts, c
         if result.status != "invalid_output" or attempt == 1:
             raise ValueError(f"{name}: {result.error or result.status}; receipt: {artifact}")
         instruction = "只修复以下已有输出以符合 schema，不调用工具、不重新研究、不添加证据或改变原语义。仅返回一个原始 JSON 对象。"
-        payload = {"previous_response": result.response, "validation_error": result.error,
+        payload = {**_continuation_context(payload), "previous_response": result.response, "validation_error": result.error,
                    "output_schema": payload["output_schema"]}
 
 

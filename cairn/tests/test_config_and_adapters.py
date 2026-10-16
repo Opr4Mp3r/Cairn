@@ -109,7 +109,7 @@ def test_pi_driver_models_json_and_execute_argv_include_context_window_and_tools
 
     assert models["providers"]["cairn"]["models"][0]["contextWindow"] == 131072
     assert "--tools" in result.argv
-    assert result.argv[-2:] == ["-p", "prompt"]
+    assert result.argv[-3:] == ["-p", "--", "prompt"]
 
 
 def _grok_worker(**extra: str) -> WorkerConfig:

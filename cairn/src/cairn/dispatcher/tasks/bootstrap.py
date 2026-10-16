@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
+
+import yaml
 
 from cairn.dispatcher.config import DispatchConfig, WorkerConfig
 from cairn.dispatcher.contracts import (
@@ -24,6 +27,7 @@ from cairn.dispatcher.tasks.common import (
     task_healthcheck_enabled,
     write_conclude_result,
     write_conclude_result_with_fact_id,
+    write_graph_snapshot_reference,
 )
 from cairn.dispatcher.workers.registry import get_driver
 from cairn.dispatcher.tasks.audit import bootstrap_metadata, research_payload, research_prompt, research_receipt, research_workspace
@@ -92,7 +96,14 @@ def run_bootstrap_task(
 
         prompt = research_prompt(
             config, project, "bootstrap.md",
-            _bootstrap_prompt_replacements(project),
+            _bootstrap_prompt_replacements(
+                project, intent=intent,
+                graph_reference=write_graph_snapshot_reference(
+                    container_manager, container_name,
+                    yaml.safe_dump(project.model_dump(mode="json", by_alias=True), allow_unicode=True, sort_keys=False),
+                    phase="bootstrap_execute", audit=True,
+                ) if project.project.mode == "audit" else "",
+            ),
         )
 
         session = driver.prepare_session()
@@ -295,7 +306,9 @@ def _try_conclude_fallback(
 
     prompt = research_prompt(
         config, project, "bootstrap_conclude.md",
-        _bootstrap_prompt_replacements(project),
+        _bootstrap_prompt_replacements(
+            project, intent=intent, graph_reference="沿用当前 session 中已提供的节点与材料入口。",
+        ),
     )
     conclude_argv = driver.build_conclude(worker, prompt, session)
     LOG.info("starting bootstrap conclude fallback project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
@@ -392,8 +405,20 @@ def _try_conclude_fallback(
     )
 
 
-def _bootstrap_prompt_replacements(project: ProjectDetail) -> dict[str, str]:
+def _bootstrap_prompt_replacements(
+    project: ProjectDetail, *, intent: Intent | None = None, graph_reference: str = "",
+) -> dict[str, str]:
     facts = {fact.id: fact.description for fact in project.facts}
+    if project.project.mode == "audit":
+        return {
+            "origin": facts.get("origin", ""),
+            "goal": "见固定任务契约 fixed_contract.goal。",
+            "hints": "见 Graph navigation 的 Hints；按需打开具体纠偏全文。",
+            "graph_yaml": graph_reference,
+            "intent_id": intent.id if intent else "",
+            "intent_description": intent.description if intent else "",
+            "intent_sources": json.dumps(intent.from_ if intent else [], ensure_ascii=False),
+        }
     hints = [
         {
             "id": hint.id,

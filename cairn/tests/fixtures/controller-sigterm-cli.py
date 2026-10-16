@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import signal
+import threading
 import uuid
 
 from click.testing import CliRunner
@@ -43,12 +44,14 @@ class FakeProcess:
         self.reason = None
         self.index = len(calls)
         self.communications = 0
+        self.cancelled = threading.Event()
 
     def start(self):
         calls.append({"argv": self.command, "workspace": self.workspace})
 
     def cancel(self, reason):
         self.reason = reason
+        self.cancelled.set()
 
     def kill(self):
         self.cancel("kill")
@@ -61,7 +64,7 @@ class FakeProcess:
             signal_events.append({"target_pid": os.getpid(), "mechanism": "signal.raise_signal(SIGTERM)",
                                   "handler": handler.__qualname__})
             signal.raise_signal(signal.SIGTERM)
-            raise AssertionError("Actual CLI SIGTERM handler should raise KeyboardInterrupt")
+            assert self.cancelled.wait(5), "SIGTERM did not cancel the background Agent process"
         if self.reason:
             return ProcessResult(-15, "partial-before-SIGTERM", "", cancelled=True, cancel_reason=self.reason)
         payload = extract_json_object(self.command[-1])
@@ -97,15 +100,17 @@ with TestClient(app) as http:
     with patch("cairn.dispatcher.protocol.client.CairnClient", lambda _url: client), patch.object(LocalBackend, "build_exec_process", build_process):
         result = CliRunner().invoke(main, ["audit", "--project", pid, "--once", "--config", str(config_path)])
     records = client.get_audit(pid).records
+    raw_receipts = [json.loads(path.read_text()) for path in workspace.glob("controller-reviews/overseer-*/result.json")]
     observation = {
         "os_sigterm_tested": True, "signal_target": "only this newly launched isolated test Python process",
         "pid": os.getpid(), "signal_events": signal_events,
         "cli_agent_invoked": False, "model_invoked": False, "tcp_port_bound": False,
         "actual_path": ["CLI audit --project --once via CliRunner", "actual CLI SIGTERM handler", "shared runtime execution",
-                        "actual call_agent and registered Claude Driver", "original monitor_once", "real TestClient Server and SQLite"],
+                        "actual call_agent and registered Claude Driver", "asynchronous monitor_audit", "real TestClient Server and SQLite"],
         "exit_code": result.exit_code, "exception": repr(result.exception), "output": result.output,
         "agent_process_plans_after_signal": len(calls), "calls": calls,
         "records": [{"phase": r.phase, "object_type": r.object_type, "attempt_status": r.attempt_status, "error": r.error} for r in records],
+        "raw_receipts": [{"phase": r["phase"], "status": r["status"], "stdout": r["process"]["stdout"]} for r in raw_receipts],
         "bug_reproduced": bool(signal_events) and len(calls) == 2 and result.exit_code == 0,
         "source_hashes": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
             "cairn/src/cairn/controller/monitor.py", "cairn/src/cairn/cli.py", "cairn/src/cairn/dispatcher/runtime/execution.py")},

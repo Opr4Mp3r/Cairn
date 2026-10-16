@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 import pytest
+import requests
 
 from cairn.controller import local, submissions as client_module
 from cairn.controller.local import CLI, stop_agent_groups
@@ -167,12 +168,12 @@ def _exists(pid):
         return False
 
 
-@pytest.mark.parametrize('failure', ['kill', 'stop'])
+@pytest.mark.parametrize('failure', ['kill', 'stop', 'brief_stop'])
 def test_agents_and_descendants_exit_without_service_restart(probe, tmp_path, monkeypatch, failure):
     config, prepared, _plan = configured(probe)
     payload = config.model_dump(mode='json')
     payload['runtime']['max_running_projects'] = 2
-    payload['tasks']['explore']['timeout'] = 60
+    payload['tasks']['explore']['timeout'] = runtime.LEASE_SECONDS * 3
     config = DispatchConfig.model_validate(payload)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
@@ -181,7 +182,7 @@ def test_agents_and_descendants_exit_without_service_restart(probe, tmp_path, mo
     config_path.write_text(config.model_dump_json())
     fake = FAKE_CLI.replace('import fcntl, json,', 'import signal, subprocess, fcntl, json,')
     fake = fake.replace('    release = pathlib.Path', '''    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    child = subprocess.Popen([sys.executable, '-c', 'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'])
+    child = subprocess.Popen([sys.executable, '-c', 'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(180)'])
     release = pathlib.Path''')
     fake = fake.replace('"pid": os.getpid(), "harness":', '"pid": os.getpid(), "child_pid": child.pid, "project": pathlib.Path.cwd().name, "harness":')
     for name in ('claude', 'grok'):
@@ -219,24 +220,47 @@ def test_agents_and_descendants_exit_without_service_restart(probe, tmp_path, mo
             records = [json.loads((registry/f"{actor['pid']}.json").read_text()) for actor in actors]
             targets = [pid for actor in actors for pid in (actor['pid'], actor['child_pid'])]
             targets += [record['guardian_pid'] for record in records]
+            previous_heartbeats = {actor['project']: client.get_runtime(actor['project'])['last_heartbeat_at']
+                                   for actor in actors}
             start = time.monotonic()
             os.kill(process.pid, signal.SIGKILL if failure == 'kill' else signal.SIGSTOP)
             if failure == 'kill':
                 process.wait(timeout=5)
+            if failure == 'brief_stop':
+                time.sleep(12)  # Cross the former lease without reaching the new hard limit.
+                assert all(_exists(pid) for pid in targets)
+                os.kill(process.pid, signal.SIGCONT)
+                def renewed_runtime(project_id):
+                    try:
+                        data = client.get_runtime(project_id)
+                    except requests.RequestException:
+                        return None  # The pre-stop keepalive connection may have expired.
+                    return data if data['last_heartbeat_at'] != previous_heartbeats[project_id] else None
+                for actor in actors:
+                    data = wait_until(lambda: renewed_runtime(actor['project']))
+                    assert data['state'] == 'running' and data['generation'] == 1
+                    assert not any(event['event'] == 'interrupted' for event in data['history'])
+                assert all(_exists(pid) for pid in targets)
+                assert len(calls_path.read_text().splitlines()) == 2
+                (tmp_path/'brief-stall.json').write_text(json.dumps({
+                    'stall_seconds': 12, 'projects': [actor['project'] for actor in actors],
+                    'same_agent_pids': targets, 'generation': 1, 'heartbeats_renewed': True,
+                    'interrupted': False}, indent=2))
+                return
             def exited():
                 if failure == 'kill':
                     return not any(_exists(pid) for pid in targets)
                 # A SIGSTOPed parent cannot reap its already exited children.
                 result = subprocess.run(['ps', '-o', 'pid=,stat=', '-p', ','.join(map(str, targets))], capture_output=True, text=True)
                 return all(line.split()[1].startswith('Z') for line in result.stdout.splitlines() if line.split())
-            wait_until(exited, seconds=16.5)
+            wait_until(exited, seconds=runtime.LEASE_SECONDS + 6.5)
             observation = {'failure': failure, 'seconds_to_all_exit': round(time.monotonic()-start, 2),
                            'target_pids': targets, 'restarted': False}
             (tmp_path/'lease-exit.json').write_text(json.dumps(observation, indent=2))
             assert (process.poll() is None) == (failure == 'stop')
     finally:
         if process.poll() is None:
-            if failure == 'stop': os.kill(process.pid, signal.SIGCONT)
+            if failure in ('stop', 'brief_stop'): os.kill(process.pid, signal.SIGCONT)
             process.send_signal(signal.SIGTERM)
             try: process.wait(timeout=20)
             except subprocess.TimeoutExpired:

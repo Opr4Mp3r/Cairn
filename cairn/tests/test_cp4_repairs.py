@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from types import SimpleNamespace
+import threading
 import uuid
 
 import pytest
@@ -21,6 +21,7 @@ from cairn.dispatcher.protocol.client import ApiResult
 from cairn.server.models import AuditRecordRequest
 
 from test_audit_review import api, audit, assessment, claim, completion, finish, node_review, review_body
+from test_role_pool_controller import pooled
 
 
 def mark_nodes_reviewed(audit):
@@ -103,11 +104,11 @@ def agent_result(config, *, phase, prompt, workspace, status="success", data=Non
 
 @pytest.mark.parametrize("phase", ["overseer", "final_review"])
 @pytest.mark.parametrize("event", ["cancelled_result", "keyboard_interrupt"])
-def test_r2_cancel_stops_all_later_agent_calls_and_keeps_current_receipt(audit, monkeypatch, phase, event):
+def test_r2_child_cancellation_respects_side_channel_and_keeps_receipt(audit, monkeypatch, phase, event):
     client, _http, config, pid, _repo = audit
     if phase == "final_review":
         mark_nodes_reviewed(audit)
-    completion(audit)
+        completion(audit)
     cancellation, calls = TaskCancellation(), []
     if event == "cancelled_result":
         def call(config, backend, **kwargs):
@@ -134,13 +135,36 @@ def test_r2_cancel_stops_all_later_agent_calls_and_keeps_current_receipt(audit, 
         monkeypatch.setattr(LocalBackend, "build_exec_process", lambda *_args, **_kwargs: InterruptedProcess())
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
     result = monitor.monitor_audit(config, client, backend, pid, once=True, cancellation=cancellation)
-    assert result["status"] == "cancelled" and cancellation.is_cancelled
+    assert result["status"] == ("cancelled" if phase == "final_review" else "active")
+    assert cancellation.is_cancelled == (phase == "final_review")
     assert calls == [phase]
     records = [r for r in client.get_audit(pid).records if r.phase == phase and r.attempt_status == "error"]
     assert len(records) == 1
     raw = json.loads(Path(records[0].artifacts[0]).read_text())
     assert raw["status"] == "cancelled" and "partial" in raw["process"]["stdout"]
     assert client.get_project(pid).project.status == "active"
+
+
+@pytest.mark.parametrize("pooled_role", [False, True])
+def test_r2_self_cancelled_overseer_has_bounded_attempts_and_never_cancels_parent(audit, monkeypatch, pooled_role):
+    client, _http, config, pid, _repo = audit
+    config = pooled(config) if pooled_role else config
+    parent, calls = TaskCancellation(), []
+
+    def call(config, backend, **kwargs):
+        calls.append(kwargs["phase"])
+        return agent_result(config, phase=kwargs["phase"], prompt=kwargs["prompt"],
+                            workspace=kwargs["workspace"], status="cancelled")
+
+    monkeypatch.setattr(monitor, "call_agent", call)
+    backend = LocalBackend(config.local)
+    for _ in range(config.controller.review.max_attempts + 2):
+        result = monitor.monitor_audit(config, client, backend, pid, once=True, cancellation=parent)
+        assert result["status"] == "active" and not parent.is_cancelled
+    records = [r for r in client.get_audit(pid).records if r.phase == "overseer"]
+    assert len(records) == len(calls) == config.controller.review.max_attempts
+    assert all(r.attempt_status == "error" and r.object_type == "intent" for r in records)
+    assert client.create_intent(pid, ["f001"], "research can continue", "fixture").ok
 
 
 def test_r2_actual_sigterm_cli_exits_without_second_agent_process(tmp_path):
@@ -155,7 +179,9 @@ def test_r2_actual_sigterm_cli_exits_without_second_agent_process(tmp_path):
     assert observed["os_sigterm_tested"]
     assert observed["agent_process_plans_after_signal"] == 1
     assert observed["exit_code"] != 0
-    assert len(observed["records"]) == 1 and observed["records"][0]["attempt_status"] == "error"
+    assert len(observed["raw_receipts"]) == 1
+    assert observed["raw_receipts"][0]["status"] == "cancelled"
+    assert "partial-before-SIGTERM" in observed["raw_receipts"][0]["stdout"]
 
 
 @pytest.mark.parametrize("temporary_conflict", [False, True])
@@ -169,7 +195,9 @@ def test_r3_retry_waits_for_lease_then_is_consumed_once(audit, monkeypatch, temp
     held = next(i for i in client.get_project(pid).intents if i.to is None)
     assert client.heartbeat(pid, held.id, "claude-main").ok
     deadline = client.get_audit(pid).final_deadline
-    claims, calls, reports, sleeps = [], [], [], []
+    config.controller.poll_interval = 1
+    claims, calls, reports = [], [], []
+    released = threading.Event()
     cancellation = TaskCancellation()
     original_claim = client.claim_completion
 
@@ -184,18 +212,19 @@ def test_r3_retry_waits_for_lease_then_is_consumed_once(audit, monkeypatch, temp
         return agent_result(config, phase=kwargs["phase"], prompt=kwargs["prompt"], workspace=kwargs["workspace"],
                             status="failed" if len(calls) == 1 else "success", data=None if len(calls) == 1 else assessment())
 
-    def sleep(_seconds):
-        sleeps.append(True)
-        if len(sleeps) == 1:
+    def report(event):
+        reports.append(event)
+        if event.get("waiting") == "existing research leases" and not released.is_set():
             assert client.release(pid, held.id, "claude-main").ok
-        elif len(sleeps) >= 4:
+            released.set()
+        if len(reports) > 8:
             cancellation.cancel("bounded regression safety stop")
 
     monkeypatch.setattr(client, "claim_completion", tracked_claim)
     monkeypatch.setattr(monitor, "call_agent", call)
-    monkeypatch.setattr(monitor, "time", SimpleNamespace(sleep=sleep))
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
-    result = monitor.monitor_audit(config, client, backend, pid, retry_review=request["id"], cancellation=cancellation, report=reports.append)
+    result = monitor.monitor_audit(config, client, backend, pid, retry_review=request["id"], cancellation=cancellation, report=report)
+    assert released.is_set()
     assert reports[0].get("waiting") == "existing research leases"
     assert result["status"] == "completed"
     assert claims == ([True, True, False] if temporary_conflict else [True, False])

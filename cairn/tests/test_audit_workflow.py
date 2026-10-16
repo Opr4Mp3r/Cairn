@@ -25,7 +25,7 @@ from cairn.dispatcher.runtime.process import ProcessResult
 from cairn.dispatcher.scheduler.loop import DispatcherLoop
 from cairn.dispatcher.tasks import explore, reason
 from cairn.dispatcher.tasks.audit import (
-    explore_result, reason_result, research_payload, research_prompt, research_workspace, supported_fact_ids,
+    candidate_fact_ids, explore_result, reason_result, research_payload, research_prompt, research_workspace,
 )
 from cairn.server import db
 from cairn.server.app import app
@@ -285,7 +285,7 @@ def test_mode_selects_prompt_and_contract_without_polluting_generic(api, tmp_pat
     forged["data"]["audit"]["review_status"] = "verified"
     with pytest.raises(ValueError, match="unverified"):
         explore_result(audited, forged)
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ValueError, match="valid premise closure"):
         reason_result(audited, {"accepted": True, "data": {"complete": {"from": ["origin"], "description": "claim"}}}, open_intents_empty=False, max_intents=2)
     truncated = json.dumps(observation())[:-1]
     assert research_payload(audited, truncated)["accepted"] is True
@@ -432,7 +432,7 @@ def test_cp3_r1_refusal_example_never_writes_graph_or_complete(api, tmp_path, mo
 
 
 @pytest.mark.parametrize("ignored_dir", ["node_modules", ".venv"])
-def test_cp3_r2_unsnapshotted_seed_is_never_a_supported_premise(api, tmp_path, monkeypatch, ignored_dir):
+def test_unsnapshotted_seed_stays_unverified_when_proposed_for_final_review(api, tmp_path, monkeypatch, ignored_dir):
     client, _http = api
     repo, config = repository(tmp_path), configuration(tmp_path)
     path = f"{ignored_dir}/pkg/entry.js"
@@ -448,12 +448,13 @@ def test_cp3_r2_unsnapshotted_seed_is_never_a_supported_premise(api, tmp_path, m
     seed = next(fact for fact in project.facts if fact.id == seed_id)
     assert path not in project.project.audit.baseline["files"]
     assert seed.audit.review_status == "unverified"
-    assert "not snapshotted" in seed.audit.review_notes and seed_id not in supported_fact_ids(project)
+    assert "not snapshotted" in seed.audit.review_notes and seed_id in candidate_fact_ids(project)
     assert any("独立验证前提" in item.description for item in project.intents)
     evidence.write_text("anonymous = false;\n")
     assert research_workspace(config, client, LocalBackend(config.local), project) == result["workspace"]
-    with pytest.raises(ValueError, match="unsupported"):
-        reason_result(project, {"accepted": True, "data": {"complete": {"from": [seed_id], "description": "old premise"}}}, open_intents_empty=False, max_intents=2)
+    kind, candidate = reason_result(project, {"accepted": True, "data": {"complete": {"from": [seed_id], "description": "requires independent review"}}}, open_intents_empty=False, max_intents=2)
+    assert kind == "complete" and candidate["from"] == [seed_id]
+    assert seed.audit.review_status == "unverified"
 
 
 @pytest.mark.parametrize("failure", ["delete_all", "unreadable", "changed", "missing_baseline"])
@@ -462,7 +463,7 @@ def test_cp3_r3_invalid_baseline_stops_server_before_agent(api, tmp_path, monkey
     repo, config = repository(tmp_path), configuration(tmp_path)
     calls_path = install_cli(tmp_path, monkeypatch, [plan(), {"approved": True, "issues": []}, review()])
     project = client.get_project(create(config, client, repo)["project_id"])
-    assert project.project.audit.seed_ids["entry"] in supported_fact_ids(project)
+    assert project.project.audit.seed_ids["entry"] in candidate_fact_ids(project)
     intent = next(item for item in project.intents if item.to is None)
     export = client.export_project(project.project.id)
     assert client.heartbeat(project.project.id, intent.id, config.workers[0].name).ok

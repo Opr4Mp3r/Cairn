@@ -70,7 +70,7 @@ class PiDriver(WorkerDriver):
         ]
         if session:
             argv.extend(["--session", session])
-        argv.extend(["-p", prompt])
+        argv.extend(["-p", "--", prompt])
         return DriverResult(argv=self._wrap_with_models(worker, argv), session=session)
 
     def build_conclude(self, worker: WorkerConfig, prompt: str, session: str) -> list[str]:
@@ -89,15 +89,16 @@ class PiDriver(WorkerDriver):
             "--session",
             session,
             "-p",
+            "--",
             prompt,
         ]
         return self._wrap_with_models(worker, argv)
 
     def _local_argv(self, worker: WorkerConfig, prompt: str, session: str | None) -> list[str]:
-        # Native pi: no models.json injection and no --provider/--model overrides, so pi uses
-        # its own host configuration. A tiny sh wrapper just ensures the session dir exists.
+        # Pi creates its session directory and retains the host provider/model configuration.
         session_dir = self._session_dir(worker)
         pi_argv = [
+            "pi",
             "--mode",
             "json",
             "--session-dir",
@@ -112,9 +113,8 @@ class PiDriver(WorkerDriver):
         ]
         if session:
             pi_argv.extend(["--session", session])
-        pi_argv.extend(["-p", prompt])
-        script = 'sdir="$1"\nshift\nmkdir -p "$sdir"\nexec pi "$@"\n'
-        return ["/bin/sh", "-lc", script, "--", session_dir, *pi_argv]
+        pi_argv.extend(["-p", "--", prompt])
+        return pi_argv
 
     def extract_session(self, session: str | None, stdout: str, stderr: str) -> str | None:
         if session:
@@ -129,24 +129,27 @@ class PiDriver(WorkerDriver):
 
     def extract_response_text(self, stdout: str, stderr: str) -> str:
         assistant_message: dict[str, Any] | None = None
-        for event in self._iter_events(stdout):
+        for event in self._iter_events(stdout, strict=True):
             event_type = event.get("type")
-            if event_type == "turn_end":
-                message = event.get("message")
-                if isinstance(message, dict) and message.get("role") == "assistant":
-                    assistant_message = message
-            elif event_type == "agent_end":
+            if event_type == "agent_end":
+                assistant_message = None
                 messages = event.get("messages")
-                if isinstance(messages, list):
-                    for message in reversed(messages):
-                        if isinstance(message, dict) and message.get("role") == "assistant":
-                            assistant_message = message
-                            break
+                if isinstance(messages, list) and messages:
+                    message = messages[-1]
+                    if isinstance(message, dict) and message.get("role") == "assistant":
+                        assistant_message = message
+            elif event_type in {"agent_start", "turn_start", "turn_end", "auto_retry_start"} or (
+                isinstance(event_type, str) and event_type.startswith(("message_", "tool_execution_"))
+            ):
+                assistant_message = None
         if assistant_message is None:
-            return stdout
+            raise ValueError("Pi output has no completed assistant response")
+        # Pi JSON mode can exit 0 after a model error; the terminal message is authoritative.
+        if assistant_message.get("stopReason") != "stop":
+            raise ValueError(f"Pi response did not complete: {assistant_message.get('stopReason')}")
         content = assistant_message.get("content")
         if not isinstance(content, list):
-            return stdout
+            raise ValueError("Pi response must contain final answer text")
         parts: list[str] = []
         for item in content:
             if not isinstance(item, dict):
@@ -156,7 +159,10 @@ class PiDriver(WorkerDriver):
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
-        return "\n".join(parts).strip() or stdout
+        response = "\n".join(parts).strip()
+        if not response:
+            raise ValueError("Pi response must contain final answer text")
+        return response
 
     def _wrap_with_models(self, worker: WorkerConfig, pi_argv: list[str], *, enable_tools: bool = True) -> list[str]:
         script = (
@@ -197,7 +203,7 @@ class PiDriver(WorkerDriver):
         return str(PurePosixPath(PiDriver._agent_dir(worker)) / "sessions")
 
     @staticmethod
-    def _iter_events(stdout: str) -> list[dict[str, Any]]:
+    def _iter_events(stdout: str, *, strict: bool = False) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         for line in stdout.splitlines():
             line = line.strip()
@@ -206,9 +212,13 @@ class PiDriver(WorkerDriver):
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
+                if strict:
+                    raise ValueError("Pi output contains an incomplete or invalid JSON event") from None
                 continue
             if isinstance(payload, dict):
                 events.append(payload)
+            elif strict:
+                raise ValueError("Pi output contains a non-object JSON event")
         return events
 
     @staticmethod

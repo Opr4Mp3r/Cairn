@@ -61,11 +61,12 @@ def test_pi_driver_extracts_session_and_last_assistant_text() -> None:
             json.dumps({"type": "session", "id": "session-123"}),
             json.dumps(
                 {
-                    "type": "turn_end",
-                    "message": {
+                    "type": "agent_end",
+                    "messages": [{
                         "role": "assistant",
                         "content": [{"type": "text", "text": '{"accepted":true,"data":{}}'}],
-                    },
+                        "stopReason": "stop",
+                    }],
                 }
             ),
         ]

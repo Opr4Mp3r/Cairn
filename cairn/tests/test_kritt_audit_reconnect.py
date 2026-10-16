@@ -116,7 +116,9 @@ def test_preflight_revision_returns_to_original_builder_and_preserves_requiremen
     recorded = [json.loads(line) for line in calls.read_text().splitlines()]
     assert recorded[1]["argv"][0:2] == ["-r", prepared["builder_session"]]
     revised_input = json.loads(recorded[1]["argv"][-1].rsplit("\n\n", 1)[1])
-    assert revised_input["plan"]["goal"] == original["goal"]
+    assert revised_input["fixed_contract"]["goal"] == original["goal"]
+    assert "plan" not in revised_input
+    assert json.loads(Path(revised_input["plan_reference"]).read_text())["goal"] == original["goal"]
     assert revised_input["preflight_issues"] == ["显式保留部署未知"]
     assert Path(revised_input["requirements_path"]).exists()
     assert len({line["argv"][1] for line in recorded if line["argv"][0] == "--session-id"}) == 3
@@ -134,14 +136,14 @@ def test_agent_inputs_strip_real_scan19_fingerprints_without_changing_source_met
         output = agent_view(context)
         assert '"files"' not in json.dumps(output) and len(json.dumps(output)) < 2000
     graph = yaml.safe_load(agent_graph_yaml(yaml.safe_dump(raw)))
-    assert "files" not in graph["project"]["audit"]["baseline"]
-    assert graph["project"]["audit"]["baseline"]["git_commit"] == "a"*40
+    assert graph["project"] == {"mode": "audit"}
     assert graph["facts"] == raw["facts"] and raw["project"]["audit"]["baseline"]["files"] is files
-    assert graph["project"]["audit"]["policy"] == policy
+    assert agent_view({"policy": policy})["policy"] == policy
+    assert agent_view({"baseline": baseline})["baseline"] == {"git_commit": "a"*40}
 
 
-@pytest.mark.parametrize("stop_after", ["reviewed_fact", "draining", "completed", "closing_completed", "budget_exhausted"])
-def test_owned_audit_dispatcher_and_monitor_write_and_review_a_new_fact(probe, monkeypatch, stop_after):
+@pytest.mark.parametrize("stop_after", ["observed_fact", "draining", "completed", "closing_completed", "budget_exhausted"])
+def test_owned_audit_dispatcher_writes_new_observations_and_independently_finishes(probe, monkeypatch, stop_after):
     config, prepared, _, _ = ready(probe)
     config.server = "http://127.0.0.1:0"
     config.runtime.interval = 1
@@ -194,24 +196,21 @@ if '"output_schema"' in prompt:
     if "approved" in props:
         result = {"approved": True, "issues": []}
     elif "reviews" in props:
-        result = {"reviews": [{"key": seed["key"], "audit": {"evidence": [{"path": "module/install/control.php", "start_line": 2}], "conditions": ["仅源码观察"], "review_status": "verified", "validation_level": "source_analysis"}} for seed in context["plan"]["seeds"]]}
+        result = {"reviews": [{"key": seed["key"], "audit": {"evidence": [{"path": "module/install/control.php", "start_line": 2}], "conditions": ["仅源码观察"], "review_status": "verified", "validation_level": "source_analysis"}} for seed in context["seeds"]]}
     elif "target" in context:
         target = context["target"]
-        fact = target.get("audit")
-        result = {"decision": "approved", "reason": "checked source", "fact_audit": None, "hint": None}
-        if fact is not None:
-            result["fact_audit"] = {**fact, "review_status": "verified", "validation_level": "source_analysis", "review_notes": "matched source"}
-            if os.environ.get("RECONNECT_OUTCOME") == "budget_exhausted":
-                result.update(decision="needs_evidence", reason="insufficient source proof")
-                result["fact_audit"]["review_status"] = "unverified"
+        assert "audit" not in target
+        result = {"decision": "approved", "reason": "direction is in scope", "fact_audit": None, "hint": None}
     elif "request" in context:
         result = {"decision": "approved", "reason": "static source checked", "proof_ids": context["request"]["from"],
                   "checks": {key: True for key in ["effect", "deployment", "attacker_capabilities", "scope", "cvss", "evidence"]}, "cvss_vector": None}
     elif "kind" in props:
-        seeds = set(context["graph"]["project"]["audit"]["seed_ids"].values())
-        facts = [fact["id"] for fact in context["graph"]["facts"]
+        graph_path = re.search(r"Full graph: (.+)", context["graph_reference"]).group(1)
+        graph = yaml.safe_load(pathlib.Path(graph_path).read_text())
+        seeds = {"f001"}  # This fixture has exactly one opening seed.
+        facts = [fact["id"] for fact in graph["facts"]
                  if fact["id"] not in {"origin", "goal", *seeds}
-                 and fact.get("audit", {}).get("review_status") == "verified"]
+                 and fact.get("audit", {}).get("review_status") != "refuted"]
         candidate = os.environ.get("RECONNECT_OUTCOME") == "closing_completed" and bool(facts)
         result = {"kind": "candidate" if candidate else "no_candidate", "from": facts[:1] if candidate else [],
                   "description": "assess only the final graph"}
@@ -220,10 +219,10 @@ if '"output_schema"' in prompt:
 else:
     graph_path = re.search(r"/tmp/cairn-prompts/[^\s]+/graph.yaml", prompt).group()
     graph = yaml.safe_load(pathlib.Path(graph_path).read_text())
-    assert graph["project"]["mode"] == "audit" and "files" not in graph["project"]["audit"]["baseline"]
+    assert graph["project"]["mode"] == "audit" and "audit" not in graph["project"]
     if "审计研究判断" in prompt:
-        seeds = set(graph["project"]["audit"]["seed_ids"].values())
-        proved = [fact for fact in graph["facts"] if fact["id"] not in {"origin", "goal", *seeds} and fact.get("audit", {}).get("review_status") == "verified"]
+        seeds = {"f001"}
+        proved = [fact for fact in graph["facts"] if fact["id"] not in {"origin", "goal", *seeds} and fact.get("audit", {}).get("review_status") != "refuted"]
         if proved and os.environ.get("RECONNECT_COMPLETE"):
             data = {"complete": {"from": [proved[0]["id"]], "description": "静态源码已观察"}}
         else:
@@ -255,12 +254,13 @@ print(json.dumps(result))
                     observed.append("draining")
                     assert client.set_project_status(project_id, "stopped").ok
                     return
-                if stop_after == "reviewed_fact" and any(fact.audit.review_status == "verified" for fact in new):
+                if stop_after == "observed_fact" and new:
+                    assert all(fact.audit.review_status == "unverified" for fact in new)
                     observed.extend(new)
                     assert client.set_project_status(project_id, "stopped").ok
                     return
                 time.sleep(.05)
-            token.cancel("test did not observe an independently reviewed fact")
+            token.cancel("test did not observe a research fact")
         except BaseException as exc:
             failures.append(str(exc))
             token.cancel("watch failed")
@@ -269,7 +269,7 @@ print(json.dumps(result))
 
     def report(event):
         nonlocal watcher
-        if stop_after in {"reviewed_fact", "draining"} and watcher is None and event.get("project_id"):
+        if stop_after in {"observed_fact", "draining"} and watcher is None and event.get("project_id"):
             watcher = threading.Thread(target=watch, args=(event["server"], event["project_id"]))
             watcher.start()
 
@@ -288,7 +288,7 @@ print(json.dumps(result))
     assert all(item["returncode"] is not None for item in result["processes"].values())
     stored = json.loads((folder / "result.json").read_text())
     assert stored["project"]["mode"] == "audit" and stored["project"]["status"] == result["status"]
-    if stop_after == "reviewed_fact":
+    if stop_after == "observed_fact":
         assert any(fact["id"] == observed[0].id for fact in stored["facts"])
     elif stop_after == "draining":
         assert observed == ["draining"]
@@ -315,7 +315,7 @@ print(json.dumps(result))
     for process in result["processes"].values():
         with pytest.raises(ProcessLookupError):
             os.kill(process["pid"], 0)
-    assert list((folder / "work" / result["project_id"] / "controller-reviews").glob("overseer-*/result.json"))
+    assert not any(record["phase"] == "overseer" and record["object_type"] == "fact" for record in audit["records"])
 
 
 def test_monitor_exit_stops_owned_audit_and_reaps_services(probe, monkeypatch):
@@ -338,7 +338,7 @@ def test_monitor_exit_stops_owned_audit_and_reaps_services(probe, monkeypatch):
     assert json.loads((folder / "completions.json").read_text()) == []
 
 
-def test_overseer_input_identifies_unsupported_premises_without_changing_server_context(probe, api, monkeypatch):
+def test_overseer_input_keeps_source_conditions_without_fact_approval_gate(probe, api, monkeypatch):
     from cairn.controller import monitor
     from cairn.controller.models import AgentCallResult
     from cairn.dispatcher.runtime.process import ProcessResult
@@ -351,17 +351,27 @@ def test_overseer_input_identifies_unsupported_premises_without_changing_server_
 
     def call(*args, **kwargs):
         captured.append(json.loads(kwargs["prompt"].rsplit("\n\n", 1)[1]))
-        data = {"decision": "needs_evidence", "reason": "必要前提未确认", "fact_audit": {"review_status": "unverified"}}
+        data = {"decision": "needs_evidence", "reason": "研究问题需要保留初始条件", "fact_audit": None}
         return AgentCallResult(role="reviewer", worker="test-worker", phase="overseer", workspace=str(kwargs["workspace"]),
             session="independent-review", prompt=kwargs["prompt"], status="success", process=ProcessResult(0, "", ""),
             response=json.dumps(data), data=data, elapsed_seconds=.01)
 
     monkeypatch.setattr(monitor, "call_agent", call)
-    context = {"target": {"id": "f100", "audit": {"evidence": [], "conditions": [], "premise_ids": ["f002"]}},
-               "premises": {"f002": {"description": "pending", "audit": {"review_status": "unverified"}}},
-               "baseline": project.project.audit.baseline, "policy": project.project.audit.policy}
-    called, _ = monitor._invoke(config, client, LocalBackend(config.local), project, phase="overseer", context=context,
+    intent = next(intent for intent in project.intents if intent.to is None)
+    context = client.get_review_input(project.project.id, "intent", intent.id)["context"]
+    source_id = next(iter(context["premises"]))
+    original_context = json.loads(json.dumps(context))
+    called, artifact = monitor._invoke(config, client, LocalBackend(config.local), project, phase="overseer", context=context,
                                model=monitor.NodeAssessment, timeout=10, cancellation=TaskCancellation())
-    assert called.status == "success" and captured[0]["unsupported_premise_ids"] == ["f002"]
-    assert "files" not in captured[0]["baseline"] and "files" in context["baseline"]
-    assert captured[0]["target"]["audit"]["premise_ids"] == ["f002"]
+    assert called.status == "success" and "unsupported_premise_ids" not in captured[0]
+    assert set(captured[0]["baseline"]) == {"git_commit"} and "files" in context["baseline"]
+    assert captured[0]["fixed_contract"]["policy"] == project.project.audit.policy
+    assert captured[0]["target"]["id"] == intent.id and "audit" not in captured[0]["target"]
+    assert "premises" not in captured[0] and captured[0]["target"]["from"] == intent.from_
+    graph_path = Path(re.search(r"Full graph: (.+)", captured[0]["graph_reference"]).group(1))
+    saved_source = next(fact for fact in yaml.safe_load(graph_path.read_text())["facts"] if fact["id"] == source_id)
+    source = next(fact for fact in project.facts if fact.id == source_id)
+    assert saved_source["audit"]["conditions"] == source.audit.conditions
+    assert saved_source["audit"]["review_notes"] == source.audit.review_notes
+    assert saved_source["audit"]["review_status"] == source.audit.review_status
+    assert context == original_context == json.loads(artifact.with_name("raw-context.json").read_text())

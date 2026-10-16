@@ -127,7 +127,7 @@ for offset, char in enumerate(prompt):
     if char != "{": continue
     try: value, _ = decoder.raw_decode(prompt[offset:])
     except ValueError: continue
-    if isinstance(value, dict) and "repo_path" in value and ("output_schema" in value or "verified_fact_ids" in value):
+    if isinstance(value, dict) and "repo_path" in value and "fixed_contract" in value:
         context = value
 assert context, "fixture expects the existing controller/research context"
 schema = context.get("output_schema", {}).get("title")
@@ -142,11 +142,11 @@ evidence = {"path":"module/install/control.php","start_line":2,"end_line":2}
 if phase in ("preflight", "seed_review", "explore"):
     assert "requireLogin" in (pathlib.Path(context["repo_path"])/evidence["path"]).read_text()
 if phase == "preflight":
-    issues = ["keep the static deployment uncertainty"] if context["plan"]["goal"] == "revise-me" else []
+    issues = ["keep the static deployment uncertainty"] if context["fixed_contract"]["goal"] == "revise-me" else []
     answer = {"approved":not issues,"issues":issues}
 elif phase == "seed_review":
     answer = {"reviews":[{"key":seed["key"],"audit":{"review_status":"verified","evidence":[evidence],
-        "conditions":["synthetic static source"],"validation_level":"source_analysis"}} for seed in context["plan"]["seeds"]]}
+        "conditions":["synthetic static source"],"validation_level":"source_analysis"}} for seed in context["seeds"]]}
 elif phase == "explore":
     release = pathlib.Path(os.environ["CP4_RELEASE"])
     while not release.exists(): time.sleep(.02)
@@ -163,7 +163,7 @@ elif phase == "final_review":
 elif phase == "closing":
     answer = {"kind":"no_candidate","from":[],"description":"the fixture waits for an explicit research candidate"}
 else:
-    proof = context.get("verified_fact_ids", [])[1:]
+    proof = context.get("candidate_fact_ids", [])[1:]
     answer = {"accepted":True,"data":{"complete":{"from":proof[:1],"description":"synthetic static goal supported"}}} if proof else {"accepted":False,"reason":"wait for independent exploration"}
 print(json.dumps(answer))
 '''
@@ -236,8 +236,10 @@ def test_skill_client_revision_pause_resume_and_independent_completion(probe, tm
             assert json.loads((folder/"result.json").read_text())["project"]["status"] == "completed"
             completion = json.loads((folder/"completions.json").read_text())[0]
             assert completion["status"] == "approved"
-            phases = {row["phase"] for row in json.loads((folder/"audit.json").read_text())["records"]}
-            assert {"preflight","seed_review","overseer","final_review"} <= phases
+            audit_records = json.loads((folder/"audit.json").read_text())["records"]
+            phases = {row["phase"] for row in audit_records}
+            assert {"preflight","seed_review","final_review"} <= phases
+            assert all(row["object_type"] == "intent" for row in audit_records if row["phase"] == "overseer")
             explored = [row for row in records() if row["phase"] == "explore"]
             assert explored[0]["session"] != explored[1]["session"]
             events = [row["event"] for row in state["runtime"]["history"]]

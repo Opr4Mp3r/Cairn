@@ -12,7 +12,7 @@
 uv sync --project cairn --group dev --python 3.13
 ```
 
-本机 `claude` 必须已登录并能够从终端直接执行任务。Cairn 不配置或替换你的 CLI 登录信息。示例为 local 模式，不需要 Docker 或 open-kritt。
+默认示例要求本机 `claude` 已登录并能够从终端直接执行任务。也可选 `grok`、`pi`（Pi Coding Agent）或 `codex`（Codex CLI）；所选命令须在启动 Cairn 的终端 PATH 中可用，`--help` 可检查安装和参数。账号和模型由本机 CLI 管理，Cairn 不改写全局登录或模型配置。示例为 local 模式，不需要 Docker 或 open-kritt。
 
 `dispatch.audit.example.yaml` 定义一个 Claude Worker，builder 和 reviewer 都引用它；每次控制器阶段使用独立 session。研究和控制器通过共享 Driver、进程执行函数调用 CLI，审核状态、policy 和预算保存在 Cairn 数据库。
 
@@ -35,7 +35,7 @@ uv sync --project cairn --group dev --python 3.13
 
 ## 配置和期限
 
-可以复制示例为自己的配置，继续通过 `workers` 与 `controller.roles` 选择 Agent。控制器没有独立的 harness 类型白名单；首版示例和真实验收覆盖 claudecode，其他 harness 仍需对应接入验证。
+可以复制示例为自己的配置，继续通过 `workers` 与 `controller.roles` 选择 Agent。控制器与研究共用 `claudecode/grok/pi/codex` 适配器；使用 `role_pools` 时可按角色混合 harness，容量为各数量之和，不另设总上限。完整配置见 [Builder 资源池说明](builder-prepare.md#角色资源池)。默认示例仍使用 claudecode，配置可加载不等于本机账号和模型已经可调用。
 
 - `runtime.prompt_group` 用于 generic 项目，示例保持 default；`controller.research_prompt_group` 为审计研究使用 audit。
 - `controller.timeouts` 限制构建、预审、种子复核、Overseer、closing 和终审的单次时间。示例不是调用耗时保证，模型和本机负载会影响实际结果。
@@ -44,6 +44,14 @@ uv sync --project cairn --group dev --python 3.13
 - `final_review_seconds` 给最后证据复核、只读 closing 和独立终审提供固定窗口。重试与恢复不重置期限。
 
 正常结果可以是 completed，也可以是 budget_exhausted。预算耗尽不意味着证明无漏洞；构建失败、权限条件未知、审核执行错误都不能伪装成确认结果。
+
+## 研究上下文与材料
+
+审计调用单份注入原 Goal 和完整 policy；图节点只承载研究结论、问题和具体纠偏，不能另定目标。Reason 从全图短导航开始，Explore 从当前 Intent 与直接来源开始；复核默认读取当前对象及必要前提，仍可沿全图导航查反证。Closing 覆盖全图找候选，最终验收从完成申请及依赖出发核对申请之外的限制。详细读取范围见 [Builder 指南](builder-prepare.md#组合研究与规划记忆)。
+
+每次调用的 `graph-index.md` 可按 ID 定位 `graph.yaml` 完整节点行范围。导航节选不能替代原结论与 conditions。新 Fact 首段保留身份、配置、对象和时序约束，详细代码分析与实验对照按需保存在工作目录并提供路径；不要求每个简单观察另写报告。历史图和原始调用记录不迁移。
+
+程序补齐源码证据 hash 并核对固定基线；Agent 无需生成机械指纹。真实实验依赖的版本／内容可在影响结论时按需核对。Monitor 无实际工作的轮次省去全量源码扫描，实际调用前后、复用结案候选提交及最终批准等边界继续检查。
 
 ## 保存的结果
 

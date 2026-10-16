@@ -135,8 +135,8 @@ def test_budget_cannot_end_before_final_reviews_and_closing(audit, clock):
     clock(client.get_audit(pid).research_deadline)
     client.audit_budget(pid)
     assert client.audit_budget(pid, finalize=True).data["status"] == "draining"
-    assert client.claim_closing(pid, CompletionClaimRequest(owner="controller")).status_code == 409
-    assert client.record_audit_review(pid, node_review(audit)).ok
+    assert client.claim_closing(pid, CompletionClaimRequest(owner="controller")).ok
+    assert not client.get_audit(pid).records
     assert client.audit_budget(pid, finalize=True).data["status"] == "draining"
 
 
@@ -267,10 +267,8 @@ def test_closing_and_final_review_use_shared_cli_with_distinct_sessions(audit, c
     proof_id = written.data["fact"]["id"]
     finalize_phase(audit, clock)
     config.controller.timeouts.closing = 15
-    reviewed = last_fact.model_copy(update={"review_status": "verified"}).model_dump(mode="json")
     calls_file = install_cli(tmp_path, monkeypatch, [
-        {"decision": "approved", "reason": "last fact checked", "fact_audit": reviewed, "hint": None},
-        {"kind": "candidate", "from": [proof_id], "description": "only existing verified evidence"},
+        {"kind": "candidate", "from": [proof_id], "description": "existing evidence to assess independently"},
         assessment([proof_id]),
     ])
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
@@ -278,9 +276,10 @@ def test_closing_and_final_review_use_shared_cli_with_distinct_sessions(audit, c
     assert result["status"] == "completed"
     calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
     sessions = [call["argv"][call["argv"].index("--session-id") + 1] for call in calls]
-    assert len(sessions) == len(set(sessions)) == 3
+    assert len(sessions) == len(set(sessions)) == 2
     records = client.get_audit(pid).records
-    assert {record.phase for record in records} >= {"overseer", "closing", "final_review"}
+    assert {record.phase for record in records} >= {"closing", "final_review"}
+    assert not any(record.phase == "overseer" and record.object_id == proof_id for record in records)
     assert all(call["cwd"] == client.get_audit(pid).workspace_path for call in calls)
     assert client.list_completions(pid)[0].from_ == [proof_id]
 

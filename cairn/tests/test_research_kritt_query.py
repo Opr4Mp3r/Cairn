@@ -149,7 +149,7 @@ def test_reviews_locate_research_receipts_separately_from_opening_ledger(probe, 
         assert matches[0]["view_digest"] == view.digest
         assert "开题查询，不是完整研究账本" in prompt and "不运行新查询" in prompt
         if phase == "overseer":
-            answer = {"decision": "approved", "reason": "research receipt located", "fact_audit": fact.audit.model_dump(mode="json"), "hint": None}
+            answer = {"decision": "approved", "reason": "research receipt located", "fact_audit": None, "hint": None}
         elif phase == "closing":
             answer = {"kind": "no_candidate", "from": [], "description": "existing receipts checked"}
         else:
@@ -162,7 +162,8 @@ def test_reviews_locate_research_receipts_separately_from_opening_ledger(probe, 
                                process=ProcessResult(0, raw, ""), elapsed_seconds=0)
 
     monkeypatch.setattr(monitor, "call_agent", assess)
-    context = client.get_review_input(project.project.id, "fact", fact.id)["context"] if phase == "overseer" else {
+    intent = next(intent for intent in project.intents if intent.to is None)
+    context = client.get_review_input(project.project.id, "intent", intent.id)["context"] if phase == "overseer" else {
         "graph": project.model_dump(mode="json", by_alias=True), "policy": project.project.audit.policy}
     verdict, _ = monitor._invoke(config, client, backend, project, phase=phase, context=context, model=model,
                                  timeout=10, cancellation=TaskCancellation())

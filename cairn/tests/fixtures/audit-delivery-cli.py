@@ -2,9 +2,12 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
+
+import yaml
 
 if "--help" in sys.argv:
     print("CP6 fake Claude")
@@ -19,7 +22,7 @@ for index, char in enumerate(prompt):
             value, _ = decoder.raw_decode(prompt[index:])
         except ValueError:
             continue
-        if isinstance(value, dict) and "repo_path" in value and ("output_schema" in value or "verified_fact_ids" in value):
+        if isinstance(value, dict) and "repo_path" in value and ("output_schema" in value or "fixed_contract" in value):
             context = value
 title = context.get("output_schema", {}).get("title")
 phase = {"AuditPlan": "build", "PreflightResult": "preflight", "SeedReviewResult": "seed_review",
@@ -51,13 +54,12 @@ elif phase == "preflight":
 elif phase == "seed_review":
     result = {"reviews": []}
 elif phase == "overseer":
-    target = context["target"]
-    data = target.get("audit")
-    if data is not None:
-        data = {**data, "review_status": "unverified" if budget else "verified", "review_notes": "controlled source judgement"}
-    result = {"decision": "needs_evidence" if budget else "approved", "reason": "controlled fixture judgement", "fact_audit": data, "hint": None}
+    assert "audit" not in context["target"]
+    result = {"decision": "approved", "reason": "controlled fixture direction", "fact_audit": None, "hint": None}
 elif phase == "closing":
-    facts = [fact["id"] for fact in context["graph"]["facts"] if fact.get("audit", {}).get("review_status") == "verified"]
+    graph_path = re.search(r"Full graph: (.+)", context["graph_reference"])[1]
+    graph = yaml.safe_load(Path(graph_path).read_text())
+    facts = [fact["id"] for fact in graph["facts"] if fact.get("audit") and fact["audit"]["review_status"] != "refuted"]
     result = {"kind": "no_candidate" if budget or not facts else "candidate", "from": [] if budget or not facts else facts[:1],
               "description": "only existing source evidence"}
 elif phase == "final_review":
@@ -69,7 +71,7 @@ elif phase == "explore":
         "evidence": [evidence], "conditions": [], "premise_ids": [], "review_status": "unverified",
         "validation_level": "source_analysis", "review_notes": "fixed-output test"}}}
 else:
-    facts = context.get("verified_fact_ids", [])
+    facts = context.get("candidate_fact_ids", [])
     if facts and not budget:
         result = {"accepted": True, "data": {"complete": {"from": facts[:1], "description": "source goal supported"}}}
     else:

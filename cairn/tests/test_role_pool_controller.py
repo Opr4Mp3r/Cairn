@@ -21,8 +21,7 @@ from cairn.dispatcher.runtime.local_backend import LocalBackend
 from cairn.dispatcher.runtime.process import ProcessResult
 
 from test_audit_workflow import api, configuration, repository, plan
-from test_audit_review import audit, assessment, node_review
-from test_audit_budget import clock
+from test_audit_review import audit
 
 
 def pooled(config):
@@ -161,6 +160,9 @@ def test_seed_batches_limit_outputs_keep_global_references_and_apply_once(api, t
             calls.append(context)
             barrier.wait(2)
             assert set(context["valid_fact_references"]) == {"origin", *keys}
+            assert "plan" not in context
+            assert {seed["key"] for seed in context["seeds"]} == set(context["review_keys"])
+            assert {seed["key"] for seed in json.loads(Path(context["plan_reference"]).read_text())["seeds"]} == set(keys)
             definitions = context["output_schema"]["$defs"]
             assert definitions["SeedAssessment"]["properties"]["key"]["enum"] == context["review_keys"]
             assert set(definitions["AuditFactData"]["properties"]["premise_ids"]["items"]["enum"]) == {"origin", *keys}
@@ -202,71 +204,49 @@ def successful(data, artifact, session="independent"):
     return SimpleNamespace(status="success", data=data, session=session, error=None), artifact
 
 
-def test_overseer_waits_for_parents_runs_siblings_together_then_closes(audit, clock, tmp_path, monkeypatch):
+def test_overseer_runs_only_open_intents_in_configured_parallel_slots(audit, tmp_path, monkeypatch):
     client, _, config, pid, _ = audit
     config = pooled(config)
-    children = [add_fact(audit, sources=["f001"], name=name) for name in ("left", "right")]
-    clock(client.get_audit(pid).research_deadline)
-    assert client.audit_budget(pid).data["audit"]["phase"] == "finalizing"
-    barrier, completed, phases, harnesses = threading.Barrier(2), [], [], []
+    add_fact(audit, sources=["f001"], name="existing observation")
+    created = client.create_intent(pid, ["f001"], "another research question", "fixture")
+    assert created.ok
+    targets = {intent.id for intent in client.get_project(pid).intents if intent.to is None}
+    barrier, observed, harnesses = threading.Barrier(2), [], []
 
     def invoke(*args, **kwargs):
-        phase = kwargs["phase"]
-        if phase == "overseer":
-            context = kwargs["context"]
-            target = context["target"]
-            if target["id"] in children:
-                assert context["premises"]["f001"]["audit"]["review_notes"] == "parent checked first"
-                harnesses.append(kwargs["worker"].type)
-                barrier.wait(2)
-            data = {"decision": "approved", "reason": "source checked", "fact_audit": {
-                **target["audit"], "review_status": "verified", "validation_level": "source_analysis",
-                "review_notes": "parent checked first" if target["id"] == "f001" else "child checked"}, "hint": None}
-            completed.append(target["id"])
-            artifact = tmp_path / (target["id"] + ".json")
-        else:
-            assert set(completed) == {"f001", *children}
-            assert all(fact.audit.review_status == "verified" for fact in client.get_project(pid).facts if fact.audit)
-            phases.append(phase)
-            data = {"kind": "candidate", "from": children, "description": "existing source proof"} if phase == "closing" else assessment(children)
-            artifact = tmp_path / (phase + ".json")
-        return successful(data, artifact, session=phase + "-" + artifact.stem)
-
-    monkeypatch.setattr(monitor, "_invoke", invoke)
-    result = monitor.monitor_once(config, client, LocalBackend(config.local), pid)
-    assert result["status"] == "completed" and result["reviewed"] == 4
-    assert phases == ["closing", "final_review"]
-    assert set(harnesses) == {"claudecode", "grok"}
-
-
-def test_overseer_discards_stale_parallel_result_and_retries_new_digest(audit, tmp_path, monkeypatch):
-    client, _, config, pid, _ = audit
-    config = pooled(config)
-    child = add_fact(audit, sources=["f001"], name="dependent")
-    mutated, child_calls = [], []
-
-    def invoke(*args, **kwargs):
-        context, target = kwargs["context"], kwargs["context"]["target"]
-        if target["id"] == child:
-            child_calls.append(context)
-            if not mutated:
-                current = next(fact for fact in client.get_project(pid).facts if fact.id == "f001")
-                changed = current.audit.model_copy(update={"conditions": [*current.audit.conditions, "changed during child review"]})
-                response = client.record_audit_review(pid, node_review(audit, data=changed))
-                assert response.ok, response.text
-                mutated.append(True)
-        data = {"decision": "approved", "reason": "source checked", "fact_audit": None, "hint": None}
-        if "audit" in target:
-            data["fact_audit"] = {**target["audit"], "review_status": "verified", "validation_level": "source_analysis"}
+        assert kwargs["phase"] == "overseer"
+        target = kwargs["context"]["target"]
+        assert target["id"] in targets and target["to_fact_id"] is None
+        assert "audit" not in target
+        observed.append(target["id"])
+        harnesses.append(kwargs["worker"].type)
+        barrier.wait(3)
+        data = {"decision": "approved", "reason": "direction remains in scope", "fact_audit": None, "hint": None}
         return successful(data, tmp_path / (target["id"] + ".json"))
 
     monkeypatch.setattr(monitor, "_invoke", invoke)
-    backend = LocalBackend(config.local)
-    monitor.monitor_once(config, client, backend, pid)
-    assert len(child_calls) == 1
-    assert not any(record.phase == "overseer" and record.object_id == child for record in client.get_audit(pid).records)
-    monitor.monitor_once(config, client, backend, pid)
-    assert len(child_calls) == 2
-    assert "changed during child review" in child_calls[1]["premises"]["f001"]["audit"]["conditions"]
-    assert any(record.phase == "overseer" and record.object_id == child and record.attempt_status == "success"
-               for record in client.get_audit(pid).records)
+    before = client.get_project(pid).facts
+    result = monitor.monitor_audit(config, client, LocalBackend(config.local), pid, once=True)
+    assert result["status"] == "active" and result["reviewed"] == 2
+    assert set(observed) == targets
+    assert set(harnesses) == {"claudecode", "grok"}
+    assert client.get_project(pid).facts == before
+
+
+def test_overseer_discards_result_after_intent_concludes(audit, tmp_path, monkeypatch):
+    client, _, config, pid, _ = audit
+    config = pooled(config)
+    intent = next(intent for intent in client.get_project(pid).intents if intent.to is None)
+
+    def invoke(*args, **kwargs):
+        assert kwargs["context"]["target"]["id"] == intent.id
+        lease = client.heartbeat(pid, intent.id, "fixture").data["lease_id"]
+        assert client.conclude(pid, intent.id, "fixture", "observation produced", lease_id=lease).ok
+        return successful({"decision": "rejected", "reason": "old direction", "fact_audit": None, "hint": "late hint"},
+                          tmp_path / "late.json")
+
+    monkeypatch.setattr(monitor, "_invoke", invoke)
+    result = monitor.monitor_audit(config, client, LocalBackend(config.local), pid, once=True)
+    assert result["status"] == "active" and result["reviewed"] == 0
+    assert not client.get_audit(pid).records
+    assert not client.get_project(pid).hints

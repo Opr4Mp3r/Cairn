@@ -8,7 +8,7 @@ import pytest
 
 from cairn.audit_evidence import repository_baseline
 from cairn.cli import main
-from cairn.controller.monitor import _strict_result, monitor_once
+from cairn.controller.monitor import _strict_result, monitor_once, monitor_audit
 from cairn.dispatcher.runtime.local_backend import LocalBackend
 from cairn.dispatcher.config import LocalConfig
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
@@ -280,17 +280,14 @@ def test_invalid_completion_sources_do_not_create_requests(audit, sources):
 def test_monitor_reuses_shared_fake_cli_and_distinct_sessions(audit, tmp_path, monkeypatch):
     client, _http, config, pid, _repo = audit
     request = completion(audit)
-    fact_data = client.get_project(pid).facts[2].audit.model_dump(mode="json")
-    outputs = [{"decision": "approved", "reason": "source checked", "fact_audit": fact_data, "hint": None},
-               {"decision": "approved", "reason": "direction is within policy", "fact_audit": None, "hint": None},
-               assessment()]
+    outputs = [assessment()]
     calls_file = install_cli(tmp_path, monkeypatch, outputs)
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
     result = monitor_once(config, client, backend, pid)
     assert result["status"] == "completed"
     calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
     sessions = [call["argv"][call["argv"].index("--session-id") + 1] for call in calls]
-    assert len(sessions) == len(set(sessions)) == 3
+    assert len(sessions) == len(set(sessions)) == 1
     assert all(call["cwd"] == client.get_audit(pid).workspace_path for call in calls)
     assert client.list_completions(pid)[0].id == request["id"]
     records = client.get_audit(pid).records
@@ -299,15 +296,13 @@ def test_monitor_reuses_shared_fake_cli_and_distinct_sessions(audit, tmp_path, m
 
 def test_monitor_duplicate_poll_does_not_make_extra_agent_calls(audit, tmp_path, monkeypatch):
     client, _http, config, pid, _repo = audit
-    fact_data = client.get_project(pid).facts[2].audit.model_dump(mode="json")
     calls_file = install_cli(tmp_path, monkeypatch, [
-        {"decision": "approved", "reason": "source checked", "fact_audit": fact_data, "hint": None},
         {"decision": "approved", "reason": "normal intent", "fact_audit": None, "hint": None},
     ])
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
-    assert monitor_once(config, client, backend, pid)["reviewed"] == 2
-    assert monitor_once(config, client, backend, pid)["reviewed"] == 0
-    assert len(calls_file.read_text().splitlines()) == 2
+    assert monitor_audit(config, client, backend, pid, once=True)["reviewed"] == 1
+    assert monitor_audit(config, client, backend, pid, once=True)["reviewed"] == 0
+    assert len(calls_file.read_text().splitlines()) == 1
 
 
 def test_monitor_rejects_multiple_objects_instead_of_selecting_success_example():
@@ -318,9 +313,7 @@ def test_monitor_rejects_multiple_objects_instead_of_selecting_success_example()
 
 def test_audit_attach_cli_runs_one_review_round(audit, tmp_path, monkeypatch):
     client, _http, config, pid, _repo = audit
-    data = client.get_project(pid).facts[2].audit.model_dump(mode="json")
     install_cli(tmp_path, monkeypatch, [
-        {"decision": "approved", "reason": "read source", "fact_audit": data, "hint": None},
         {"decision": "approved", "reason": "normal intent", "fact_audit": None, "hint": None},
     ])
     config_path = tmp_path / "config.json"
@@ -328,7 +321,7 @@ def test_audit_attach_cli_runs_one_review_round(audit, tmp_path, monkeypatch):
     monkeypatch.setattr("cairn.dispatcher.protocol.client.CairnClient", lambda _url: client)
     response = CliRunner().invoke(main, ["audit", "--project", pid, "--once", "--config", str(config_path)])
     assert response.exit_code == 0, response.output
-    assert json.loads(response.output)["reviewed"] == 2
+    assert json.loads(response.output)["reviewed"] == 1
 
 
 def test_reason_task_submits_request_and_scheduler_waits_for_review(audit, tmp_path, monkeypatch):
@@ -372,27 +365,20 @@ def test_bootstrap_complete_also_requires_independent_review(audit, tmp_path, mo
     assert not any(i.to == "goal" for i in updated.intents)
 
 
-def test_overseer_invalid_evidence_is_error_and_does_not_retry_forever(audit, tmp_path, monkeypatch):
+def test_overseer_fact_mutation_is_invalid_output_and_retries_are_bounded(audit, tmp_path, monkeypatch):
     client, _http, config, pid, _repo = audit
-    data = client.get_project(pid).facts[2].audit.model_dump(mode="json")
-    data["evidence"][0]["sha256"] = "a" * 64
-    # 先独立审阅正常 Intent，随后两次不合格 Fact 判断必须作为执行错误记录。
-    intent = next(i for i in client.get_project(pid).intents if i.to is None)
-    inputs = client.get_review_input(pid, "intent", intent.id)
-    assert client.record_audit_review(pid, AuditRecordRequest(
-        record_key="intent-ready", object_type="intent", object_id=intent.id, input_digest=inputs["input_digest"],
-        phase="overseer", session="prior-review", attempt_status="success", decision="approved",
-    )).ok
-    output = {"decision": "approved", "reason": "incorrect evidence hash", "fact_audit": data, "hint": None}
+    original = client.get_project(pid).facts[2].audit
+    output = {"decision": "approved", "reason": "attempts to modify a fact",
+              "fact_audit": original.model_dump(mode="json"), "hint": None}
     calls = install_cli(tmp_path, monkeypatch, [output, output])
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
-    assert monitor_once(config, client, backend, pid)["reviewed"] == 1
-    assert monitor_once(config, client, backend, pid)["reviewed"] == 1
-    assert monitor_once(config, client, backend, pid)["reviewed"] == 0
+    assert monitor_audit(config, client, backend, pid, once=True)["reviewed"] == 1
+    assert monitor_audit(config, client, backend, pid, once=True)["reviewed"] == 1
+    assert monitor_audit(config, client, backend, pid, once=True)["reviewed"] == 0
     assert len(calls.read_text().splitlines()) == 2
-    records = [r for r in client.get_audit(pid).records if r.object_type == "fact"]
-    assert len(records) == 2 and all(r.attempt_status == "error" and r.decision is None for r in records)
-    assert client.get_project(pid).facts[2].audit.review_status == "verified"
+    records = client.get_audit(pid).records
+    assert len(records) == 2 and all(r.object_type == "intent" and r.attempt_status == "error" and r.decision is None for r in records)
+    assert client.get_project(pid).facts[2].audit == original
 
 
 @pytest.mark.parametrize("audit", [{"cvss": {"AV": "N", "PR": "N", "UI": "N", "any_of": [{"C": "H"}, {"I": "H"}]}}], indirect=True)
@@ -433,20 +419,24 @@ def test_source_only_goal_without_cvss_constraints_does_not_force_fake_vulnerabi
     assert finish(audit, request, body).status_code == 200
 
 
-def test_semantically_invalid_review_is_recorded_as_error_not_applied(audit, tmp_path, monkeypatch):
+def test_intent_rejection_only_writes_hint_without_cancelling_research(audit, tmp_path, monkeypatch):
     client, _http, config, pid, _repo = audit
-    data = client.get_project(pid).facts[2].audit.model_dump(mode="json")
-    data["premise_ids"] = ["f001"]
-    outputs = [
-        {"decision": "approved", "reason": "invalid self dependency", "fact_audit": data, "hint": None},
-        {"decision": "approved", "reason": "valid intent", "fact_audit": None, "hint": None},
-    ]
-    install_cli(tmp_path, monkeypatch, outputs)
+    original = client.get_project(pid)
+    intent = next(i for i in original.intents if i.to is None)
+    lease = client.heartbeat(pid, intent.id, "claude-main")
+    assert lease.ok
+    install_cli(tmp_path, monkeypatch, [
+        {"decision": "rejected", "reason": "task assumes a missing initial capability", "fact_audit": None,
+         "hint": "Keep the initial capability unknown and investigate its source."},
+    ])
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
-    assert monitor_once(config, client, backend, pid)["reviewed"] == 2
-    record = next(r for r in client.get_audit(pid).records if r.object_type == "fact")
-    assert record.attempt_status == "error" and record.decision is None
-    assert client.get_project(pid).facts[2].audit.premise_ids == []
+    assert monitor_audit(config, client, backend, pid, once=True)["reviewed"] == 1
+    current = client.get_project(pid)
+    assert current.project.status == "active"
+    assert current.facts == original.facts
+    assert next(i for i in current.intents if i.id == intent.id).worker == "claude-main"
+    assert next(i for i in current.intents if i.id == intent.id).to is None
+    assert len(current.hints) == len(original.hints) + 1
 
 
 @pytest.mark.parametrize("audit", [{"cvss": []}, {"cvss": {"any_of": [{}]}}], indirect=True)

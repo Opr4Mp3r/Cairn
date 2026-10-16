@@ -8,6 +8,7 @@ from click.testing import CliRunner
 import pytest
 
 from cairn.cli import main
+from cairn.audit_inputs import model_output_schema
 from cairn.controller.audit import AuditPlan
 from cairn.controller.builder import prepare_builder, run_builder
 from cairn.controller.models import AgentCallResult
@@ -109,7 +110,10 @@ def test_prepare_saves_verified_inputs_and_a_working_query_command_without_agent
     assert Path(result["view"]).read_bytes() == view.read_bytes()
     references = json.loads(Path(result["references"]).read_text())
     assert Path(references[0]["path"]).read_text() == reference.read_text()
-    assert json.loads(Path(result["plan_schema"]).read_text()) == AuditPlan.model_json_schema()
+    schema = json.loads(Path(result["plan_schema"]).read_text())
+    assert schema == model_output_schema(AuditPlan.model_json_schema())
+    assert "sha256" not in schema["$defs"]["EvidenceReference"]["properties"]
+    assert "sha256" in AuditPlan.model_json_schema()["$defs"]["EvidenceReference"]["properties"]
     assert json.loads(Path(result["materials"]).read_text()) == []
     assert json.loads((folder / "query-receipts.json").read_text())["queries"] == []
     assert not Path(result["plan"]).exists() and not list(folder.glob("call-*"))

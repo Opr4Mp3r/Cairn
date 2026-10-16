@@ -15,8 +15,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
+from cairn.audit_inputs import model_output_schema
 from cairn.controller.app import call_agent
-from cairn.controller.audit import AuditPlan
+from cairn.controller.audit import AuditPlan, _continuation_context, _plan_payload
 from cairn.controller.kritt import KrittView, read_kritt_view
 from cairn.controller.kritt_query import collect_queries, write_json as _write
 from cairn.controller.kritt_source import verify_source
@@ -105,7 +106,7 @@ def _turn(config, backend, folder: Path, call: int, instruction: str, context: d
         if not session:
             raise RuntimeError("builder harness returned no session for format repair")
         prompt_text = "只修复已有输出，使它符合 schema。不要查询，不要改研究结论。只返回一个原始 JSON 对象。"
-        payload = {"previous_response": called.response or "", "validation_error": called.error,
+        payload = {**_continuation_context(payload), "previous_response": called.response or "", "validation_error": called.error,
                    "output_schema": context["output_schema"]}
     raise AssertionError("unreachable")
 
@@ -176,7 +177,7 @@ def prepare_builder(config: DispatchConfig, *, target_name: str, user_goal: str,
         references = _references(target, folder)
         messages = [{"role": "user", "content": user_goal.strip()}]
         _write(folder / "requirements.json", {"user_goal": user_goal.strip(), "messages": messages})
-        _write(folder / "audit-plan.schema.json", AuditPlan.model_json_schema())
+        _write(folder / "audit-plan.schema.json", model_output_schema(AuditPlan.model_json_schema()))
         prepared = {
             "status": "prepared", "scan_id": view.scan["id"], "commit_sha": view.scan["commit_sha"],
             "repo_full": target.repo_full, "source_root": str(repo), "run_dir": str(folder),
@@ -239,11 +240,15 @@ def continue_builder(config: DispatchConfig, prepared: dict, *, current_plan: Au
         "references_path": prepared["references"],
         "kritt_query_command": shlex.join([sys.executable, "-m", "cairn.controller.kritt_query",
                                             "--context", prepared["query_context"]]),
-        "output_schema": BuilderAction.model_json_schema(),
+        "output_schema": model_output_schema(BuilderAction.model_json_schema()),
     }
     if current_plan is not None:
         context.update(plan=current_plan.model_dump(mode="json", by_alias=True),
-                       preflight_issues=preflight_issues or [])
+                       preflight_issues=preflight_issues or [], baseline={"git_commit": prepared["commit_sha"]})
+        directory = folder / f"plan-input-{calls + 1:03d}"
+        directory.mkdir()
+        _write(directory / "raw-context.json", context)
+        context = {**_plan_payload("build", context, directory), "output_schema": context["output_schema"]}
     while True:
         calls += 1
         prepared["calls"] = calls
@@ -262,8 +267,9 @@ def continue_builder(config: DispatchConfig, prepared: dict, *, current_plan: Au
             messages.extend([{"role": "assistant", "content": "\n".join(action.questions)},
                              {"role": "user", "content": reply.strip()}])
             _write(folder / "requirements.json", {"user_goal": user_goal.strip(), "messages": messages})
-            context = {"reply": reply.strip(), "requirements_path": str(folder / "requirements.json"),
-                       "output_schema": BuilderAction.model_json_schema()}
+            context = {**_continuation_context(context), "reply": reply.strip(),
+                       "requirements_path": str(folder / "requirements.json"),
+                       "output_schema": model_output_schema(BuilderAction.model_json_schema())}
             instruction = "结合用户答复继续当前开题，必要时使用已有工具；最终只返回 ask 或 finish JSON。"
             LOG.info("Builder：已收到答复，继续 session=%s", session)
             continue

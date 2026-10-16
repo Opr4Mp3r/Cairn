@@ -300,9 +300,10 @@ def _try_conclude_fallback(
     prompt = research_prompt(
         config, project, "explore_conclude.md",
         {
-            "graph_yaml": "",
+            "graph_yaml": "沿用当前 session 中已提供的节点与材料入口。" if project.project.mode == "audit" else "",
             "intent_id": intent.id,
             "intent_description": intent.description,
+            "intent_sources": json.dumps(intent.from_, ensure_ascii=False),
         },
     )
     conclude_argv = driver.build_conclude(worker, prompt, session)

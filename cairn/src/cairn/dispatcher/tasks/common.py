@@ -62,12 +62,16 @@ def write_graph_snapshot_reference(
     audit: bool = False,
 ) -> str:
     path = f"{GRAPH_SNAPSHOT_ROOT}/{phase}-{uuid.uuid4().hex[:12]}/graph.yaml"
-    container_manager.write_text_file(container_name, path, agent_graph_yaml(graph_yaml) if audit else graph_yaml)
+    snapshot = agent_graph_yaml(graph_yaml) if audit else graph_yaml
+    container_manager.write_text_file(container_name, path, snapshot)
     if audit:
         index_path = path.removesuffix("graph.yaml") + "graph-index.md"
-        container_manager.write_text_file(container_name, index_path, graph_index(graph_yaml))
+        container_manager.write_text_file(container_name, index_path, graph_index(snapshot))
         return (f"Graph navigation: {index_path}\nFull graph: {path}\n"
-                "Navigation previews are incomplete; read original nodes, conditions and relevant Hints by ID.")
+                "Navigation previews are incomplete; read original nodes and conditions before relying on them. "
+                + ("Locate the Current Intent source IDs and Hint entries first; expand to other nodes as needed."
+                   if phase.startswith(("explore", "bootstrap")) else
+                   "Read the global navigation once, then open relevant nodes and Hints as needed."))
     return (
         "The graph YAML snapshot is stored in this task file:\n\n"
         f"{path}\n\n"

@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from cairn.audit_evidence import repository_baseline
-from cairn.audit_inputs import graph_index
+from cairn.audit_inputs import fact_view, graph_index
 from cairn.dispatcher.protocol.client import ApiResult
 from cairn.dispatcher.runtime.cancellation import TaskCancellation
 from cairn.dispatcher.runtime.local_backend import LocalBackend
@@ -72,7 +72,7 @@ def action(notes=None):
     return {"accepted": True, "data": data}
 
 
-def test_navigation_preserves_constraints_and_points_to_unmodified_full_graph(harness):
+def test_navigation_points_to_full_constraints_without_expanding_them(harness):
     project, _, workspace, driver, _, run = harness
     condition = "必须保持的完整条件" * 200
     graph = {"facts": [{"id": "f001", "description": "x" * 500 + "\n\n原始细节",
@@ -80,25 +80,32 @@ def test_navigation_preserves_constraints_and_points_to_unmodified_full_graph(ha
              "intents": [{"id": "i001", "from": ["f001"], "description": "open", "to": None},
                          {"id": "i002", "to": "f002", "description": "closed"}],
              "hints": [{"id": "h001", "content": "不能忽略的纠偏"}]}
-    text = yaml.safe_dump(graph, allow_unicode=True)
+    text = yaml.safe_dump(graph, allow_unicode=True, sort_keys=False)
     index = graph_index(text)
-    assert condition in index and '"truncated": true' in index
+    assert condition not in index and "节选" in index
     assert "f002" in index and "unverified" in index
-    assert "i001" in index and "i002" not in index and "不能忽略的纠偏" in index
+    open_section = index.split("## Open Intents", 1)[1].split("## 已完成 Intent 定位", 1)[0]
+    assert "i001" in open_section and "i002" not in open_section
+    assert "不能忽略的纠偏" in index and "closed" not in index
     assert run(action()) == "success"
     context = json.loads(driver.execute_prompts[-1].split("## 固定审计上下文\n", 1)[1])
     assert context["reason_memory"]["note"]
     navigation = list(workspace.parent.parent.glob("prompts/*/graph-index.md"))
     assert len(navigation) == 1 and str(navigation[0]) in driver.execute_prompts[-1]
     full = yaml.safe_load(navigation[0].with_name("graph.yaml").read_text())
-    assert full["facts"] == [fact.model_dump(mode="json") for fact in project.facts]
+    full_facts = {fact["id"]: fact for fact in full["facts"]}
+    assert full_facts["f001"] == fact_view(project.facts[2].model_dump(mode="json"))
+    assert full_facts["goal"]["description"] != project.facts[1].description
 
 
 def test_successful_notes_survive_old_output_and_generation_change(harness):
     project, client, workspace, driver, _, run = harness
     assert run(action("暂搁 A；f001 出现新条件后再研究。")) == "success"
     first = load_memory(project, str(workspace))["previous_plan"]
-    assert Path(first["receipt_path"]).is_file() and first["audit_revision"] == 1
+    assert Path(first["receipt_path"]).is_file()
+    assert set(first) == {"planning_notes", "reason_started_at", "receipt_path", "memory_path"}
+    original = json.loads(Path(first["memory_path"]).read_text())
+    assert original["audit_revision"] == 1 and original["policy_digest"] == "fixed-policy"
     assert run(action()) == "success"
     assert load_memory(project, str(workspace))["previous_plan"] == first
     assert run(action("  \n ")) == "success"

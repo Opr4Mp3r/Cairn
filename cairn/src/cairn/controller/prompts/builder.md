@@ -6,8 +6,8 @@
 
 阅读 references_path 中列出的资料和必要源码；policy.threat_model 每项使用 claim、kind（official/inferred/unknown）、source。official 仅表示官方文档明确声明的规则或边界；从源码或既有分析得出的判断标为 inferred，未确认项为 unknown。官方仓库中的代码也不自动构成官方威胁模型。没有官方文档可以继续，不冒充官方认可。只做开题所需研究，不修改源码、部署目标、执行利用实验或自行调用子 Agent。
 
-Kritt 的 rank、canonical、valid、scope 和自报确认只是既有分析标签。代码行为、可达性、部署状态和危害判断进入待复核 seeds；description 首段给出主要结论及关键条件，保留对象归属、作用范围、状态／时序差异和未知。origin 只放任务身份、版本及用户要求，不能充当证据。audit.evidence 只填写仓库内源码路径和行号，Kritt 材料/回执路径放在 description 或 review_notes；缺少源码引用时 evidence 可为空。种子初始为 unverified；premise_ids 和 Intent 的 from 只引用本次 seed key 或字面量 origin，不引用 goal、不形成循环。Intent.from 是选材来源，premise_ids 仅列结论实际依赖的前提，不自动互相复制。
+Kritt 的 rank、canonical、valid、scope 和自报确认只是既有分析标签。代码行为、可达性、部署状态和危害判断进入待复核 seeds；description 首段给出主要结论及关键条件，保留对象归属、作用范围、状态／时序差异和未知。origin 只放任务身份、版本及用户要求，不能充当证据。audit.evidence 只填写仓库内源码路径和行号，Kritt 材料/回执路径放在 description 或 review_notes；缺少源码引用时 evidence 可为空。详细代码分析和实验过程留在现有材料路径，图中只保留条件性结论、缺口和入口，不要求简单观察另写报告。种子初始为 unverified；premise_ids 和 Intent 的 from 只引用本次 seed key 或字面量 origin，不引用 goal、不形成循环。Intent.from 是选材来源，premise_ids 仅列结论实际依赖的前提，不自动互相复制。
 
-仅在缺少会改变范围或导致无法开工的关键信息时简短提问。否则返回 AuditPlan。policy 定义目标与约束，不能把未复核的源码判断写成必须接受的已知前提。Goal 不加入“证明不可能”出口，不放宽用户条件；CVSS 使用既有指标及 any_of/all_of，不能替代部署和效果，仅源码研究可为空对象。保持方案紧凑，指出下一步要证实什么。
+仅在缺少会改变范围或导致无法开工的关键信息时简短提问。否则返回 AuditPlan。将需求的全部约束整理进现有 Goal／policy；后续调用会集中注入这份固定契约，种子、Intent 和 Hint 不重复角色指令或输出规则，也不能自行改写目标。不能把未复核的源码判断写成必须接受的 policy 前提。Goal 不加入“证明不可能”出口，不放宽用户条件；CVSS 使用既有指标及 any_of/all_of，不能替代部署和效果，仅源码研究可为空对象。保持方案紧凑，指出下一步要证实什么。
 
-最终只返回 output_schema 规定的 ask 或 finish 原始 JSON，不返回 query 动作、Markdown 或前后说明。查询直接在当前 harness 会话内调用命令。收到 preflight_issues 时针对当前方案修订，保留用户意图和已取材料。
+最终只返回 output_schema 规定的 ask 或 finish 原始 JSON，不返回 query 动作、Markdown 或前后说明。查询直接在当前 harness 会话内调用命令。已有草案时先看 fixed_contract 和计划概览，按需沿 plan_reference 读取原计划；依据 preflight_issues 忠实原需求修订草案，保留已取材料，不通过局部修订放宽用户约束。

@@ -9,7 +9,7 @@ description: 在 Claude Code 原生会话中管理 Cairn 的本地源码审查�
 
 直接使用当前会话的 Read、Bash、Write/Edit；不创建 MCP、嵌套 Builder 或另一套调度器。服务运行后可以提交并开始任务；服务的启动、关闭、重启由用户在终端执行。连接失败只说明人工启动方式，不执行 Docker 启停、`cairn up/serve/dispatch/start/builder/audit`、后台守护或换端口启动服务。
 
-本 Skill 负责已授权本地源码的静态审查、风险证据核对和修复研究；不构造或执行利用链。保留用户条件与未知，研究判断由现有独立审核流程处理。
+本 Skill 负责已授权本地源码的静态审查、风险证据核对和修复研究；不构造或执行利用链。保留用户条件与未知；种子开题复核保留，运行期 Overseer 只看未结 Intent 并通过 Hint 纠偏，不逐条认证 Fact、不阻塞研究。目标是否达成由独立终审核验候选及必要前提。
 
 ## 1. 先选择任务路径
 
@@ -33,9 +33,9 @@ python3 /absolute/path/to/cairn/.claude/skills/cairn-builder/scripts/cairn.py
 
 展示各角色的 harness 和数量。用户未明确本次选择时主动问一次是否沿用或调整；已经说“沿用”“其余默认”或给出完整选择时不重复确认。无资源池时提出七个角色各 `claudecode: 1`；未决定的名额保持待定，不自行增加并发或提交任务。
 
-按答复直接保存 `explore/reason/preflight/seed_review/overseer/closing/final_review` 七个角色，每项使用已支持的 harness 与正整数数量。移除项就删除，不写 0；每个角色至少一种。角色容量等于各数量之和，不另设总上限，不手写内部 workers。Reason、Preflight、Closing、Final Review 每项目仍串行。
+按答复直接保存 `explore/reason/preflight/seed_review/overseer/closing/final_review` 七个角色，每项使用 `claudecode/grok/pi/codex` 与正整数数量。移除项就删除，不写 0；每个角色至少一种。角色容量等于各数量之和，不另设总上限，不手写内部 workers。Reason、Preflight、Closing、Final Review 每项目仍串行。Overseer 数量表示可并发观察的 Intent 数，不是同一结论的投票数，也不必与 Explore 数量相等。
 
-用项目 Python 的 `DispatchConfig.load` 检查能否加载，只展示资源池与合计，不输出整份配置或凭据。模型、provider、登录、代理沿用本机 CLI/CCSwitch，不修改全局设置。当前 Builder 会话不占后台池名额。
+用项目 Python 的 `DispatchConfig.load` 检查能否加载，只展示资源池与合计，不输出整份配置或凭据。用所选 CLI 的 `--help` 确认命令可用：`claudecode` 对应 `claude`，其余为同名命令；`pi` 指 Pi Coding Agent。此检查不证明账号／模型可调用。模型、provider、登录、代理沿用本机 CLI/CCSwitch，不在 Cairn 重配或修改全局设置。当前 Builder 会话不占后台池名额。
 
 prepare 使用刚保存的配置；把资源池问答追加到新 run 的 `requirements.json.messages`。修改 YAML 不代表在线服务热加载；submit 的 `--config` 明确把这份执行快照随任务提交。已有运行沿用原池，本轮不热修改恢复任务的配置。
 
@@ -48,7 +48,7 @@ CLIENT prepare --config /path/to/task.yaml --target TARGET \
 
 实际执行时把 `CLIENT` 替换为第 1 节完整前缀。可指定 `--scan-id N`；仅当用户选择离线视图时使用 `--view /path/to/view.json`。目标、scan/commit、源码、manifest、只读连接必须匹配；错误时报告具体阻塞，不自行切版本或刷新材料。run 放在目标源码之外。prepare 不调用模型或启动服务。
 
-读取返回的 `run.json`、`plan_schema`、`requirements` 和资料路径。将需求问答追加到 `requirements.json.messages`，使用 role/content，保留 user_goal 原文。仅追问影响范围或阻止开工的缺失信息。
+先读取返回的 `run.json`、`plan_schema`、`requirements` 和材料入口，围绕用户需求及当前 Goal／policy 草案选材；已选材料和源码按问题展开，不默认通读全部记录。将需求问答追加到 `requirements.json.messages`，使用 role/content，保留 user_goal 原文。仅追问影响范围或阻止开工的缺失信息。
 
 通过 Bash 使用 prepare 返回的完整 `kritt_query_command`，向 stdin 输入 JSON，不另找数据库凭据或写 Kritt：
 
@@ -69,11 +69,12 @@ CLIENT prepare --config /path/to/task.yaml --target TARGET \
 读取本 run 的 plan_schema，将原始 AuditPlan JSON 写入 plan.json，不使用 ask/finish 封装。
 
 - origin 只写身份、版本和用户要求；代码行为、可达性、部署和影响作为待复核 seeds。
-- 所有种子的 audit.review_status 为 unverified；description 首段给出主要结论和关键条件，保留对象归属、作用范围、状态／时序及未知。无源码引用时 evidence 可为空；evidence 只写仓库内路径与行号，Kritt 回执写 description/review_notes。
+- 所有种子的 audit.review_status 为 unverified；description 首段给出可复用的条件性结论，保留对象归属、身份、作用范围、状态／时序及未知。conditions 列必要条件；review_notes 补边界、反证和实际材料入口。详细代码分析、命令和对照按需保存在现有工作目录，不搬进图，也不要求简单观察另写报告。
+- 无源码引用时 evidence 可为空；evidence 只写仓库内路径与行号，源码证据 hash 由程序补齐。Kritt 材料／回执路径写 description/review_notes；工具返回的完整 ref 仍原样保留。
 - seed key 唯一，不用 origin/goal；premise_ids 和 Intent.from 只引用本次 seed 或 origin，不引用 goal、不循环。Intent.from 是选材来源，premise_ids 仅列实际逻辑依赖，不自动互相复制。
-- policy 保留 effect/deployment/attacker_capabilities/scope/cvss/evidence_requirements/threat_model。威胁模型 claim 注明 official/inferred/unknown 与 source；源码不自动等于官方模型。静态任务 cvss 可为空。
+- 将用户完整约束整理到现有 Goal／policy；policy 保留 effect/deployment/attacker_capabilities/scope/cvss/evidence_requirements/threat_model。后台会单份注入固定契约，节点不复写角色规则或输出要求，也不能另定 Goal。威胁模型 claim 注明 official/inferred/unknown 与 source；源码不自动等于官方模型。静态任务 cvss 可为空。
 - 不放宽用户条件、不把待复核判断当成 policy 前提、不加入“证明不可能”出口。
-- policy 固定初始能力；后续能力须由前序证据解释。组合 Intent 说明前一步产生什么、后一步缺什么及待验证的连接；条件下机制成立、可接入当前路径、满足 Goal 分别判断，不预判衔接成功。
+- policy 固定初始能力；后续能力须由前序证据解释。Intent 首段说明待查问题与关键边界，必要时补来源 ID、分工和判别观察；不复制前序报告。组合任务说明前一步产生什么、后一步缺什么及待验证的连接，不能用某个后段实验成功预设完整 Goal 成立。Hint 只写具体纠偏，不承担长期规则。
 
 用户要求提交时运行：
 

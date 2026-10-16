@@ -125,7 +125,8 @@ def run_reason_task(
                     audit=project.project.mode == "audit",
                 ),
                 "fact_ids": format_fact_ids(allowed_fact_ids),
-                "open_intents": format_open_intents(open_intents),
+                "open_intents": ("见 Graph navigation 的 Open Intents：问题预览、来源、占用状态和全文位置。"
+                                 if project.project.mode == "audit" else format_open_intents(open_intents)),
                 "max_intents": str(config.tasks.reason.max_intents),
             },
             reason_memory=memory,
