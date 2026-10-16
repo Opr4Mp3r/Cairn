@@ -13,3 +13,8 @@ dispatch.builder.yaml
 /.claude/artifacts/*
 !/.claude/artifacts/cairn-builder.skill
 /docs/diagrams/.*.bkp
+
+# 本机服务配置和审计目标源码不入库。
+/dispatch.service.yaml
+/dispatch.validation.yaml
+/target-source/

@@ -1,265 +1,226 @@
-<div align="center">
+# Cairn Audit · Cairn 二次开发版
 
-<img src="./README/banner.png" alt="Cairn Banner"/>
+面向 **Kritt 辅助的白盒代码审计与多 Agent 组合研究**。复用 Cairn 的黑板架构，在共享的 Fact–Intent 图上安排探索、积累条件性结论，并由独立终审判断研究目标是否达成。
 
-# Cairn
-### More Than Just AI Penetration Testing — Towards General State-Space Search
+> 本仓库 Fork 自 [oritera/Cairn](https://github.com/oritera/Cairn)，属于独立二次开发版本。保留上游 Git 历史、原作者署名和 [GNU AGPLv3 许可证](LICENSE)，不代表上游官方发布。
+>
+> [上游 README（本地开发基线）](README.upstream.md) · [二开记录与提交索引](DEVELOPMENT.md) · [使用指南](docs/builder-prepare.md) · [服务与恢复](docs/managed-service.md)
 
-<p>
-  <a href="https://zc.tencent.com/hackathon" target="_blank" rel="noopener noreferrer">
-    <img src="./README/tencent.png" alt="Tencent" height="55" />
-  </a>
-  <a href="https://zc.tencent.com/hackathon" target="_blank" rel="noopener noreferrer">
-    <img src="./README/tch.png" alt="TCH" height="55" />
-  </a>
-  <a href="https://wiki.chainreactors.red" target="_blank" rel="noopener noreferrer">
-    <img src="./README/c.png" alt="ChainReactors" height="45" />
-  </a>
-</p>
+## 为什么做这个 Fork
 
-Cairn is a general-purpose problem-solving engine. <br/>It defines no roles, no workflows. Given an origin and a goal, it searches for a path through an unknown state space. <br/>AI Penetration Testing is one such problem — and a proven one.
+Kritt 的自动化扫描已经能积累入口、执行流程和候选发现。这个版本把这些材料交给交互式 Builder，再由 Cairn 在同一张图上继续研究：验证缺失条件、检查不同机制能否衔接、保留反证，减少从零重复阅读。
 
-<p>
-  <a href="https://discord.gg/nDSy4NZVP" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/badge/Discord-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" />
-  </a>
-  <a href="https://x.com/le1xia0" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/badge/X-000000?style=flat-square&logo=x&logoColor=white" alt="X" />
-  </a>
-</p>
+代码审计中的 Fact 是带条件和证据状态的观察，不因写入图就自动成为漏洞证明。项目输入、研究产出、导入材料与审核结论分别保留身份；`Complete` 是完成申请，`completed` 需要独立终审通过。
 
-</div>
+## 已完成的二开能力
 
-<p align="center">
-  <a href="https://www.bilibili.com/video/BV1a8R5BhEVi/" target="_blank" rel="noopener noreferrer">
-    <img src="./README/cairn.png" alt="Cairn runtime screenshot" width="900" />
-  </a>
-</p>
+| 能力 | 当前行为 |
+| --- | --- |
+| 原生 Builder Skill | 在 Claude Code 当前会话中交互开题、确认资源池、读取 Kritt 材料与源码、生成及修订 AuditPlan，提交后查询、暂停或恢复任务 |
+| Kritt 只读接入 | 从 PostgreSQL 读取指定扫描，固定 scan/commit 和输入视图；研究阶段通过固定的 describe/search/get 入口按需读取，保存查询回执 |
+| 审计契约与威胁模型 | 将目标效果、部署、攻击者能力、范围、CVSS 约束和有来源的威胁模型保存在 Goal/policy 中；未知项保留为未知 |
+| 独立准备与验收 | 开题有 Preflight 和 Seed Review；Reason/Closing 提交候选后，由独立 Final Review 核验候选及必要前提 |
+| Intent 旁路监督 | Overseer 异步观察未结 Intent，以 Hint 纠正方向与条件漂移；不逐条认证运行期 Fact，不阻塞研究和收尾 |
+| 组合研究与规划记忆 | 保留条件、状态转换和逻辑依赖；Reason 可保存已考虑连接、暂搁原因、重开条件与下一步重点 |
+| 按角色配置资源池 | 每个角色选择可用 harness 和数量；Explore 在同一图内混合并发，容量为各数量之和 |
+| 时间预算与结案 | 预算结束后停止派发新探索，允许在途工作收敛，并执行有界 Closing/终审；未达目标记为 `budget_exhausted` |
+| 暂停与断点恢复 | 暂停、停机不继续消耗运行预算；恢复原图、材料、阶段和剩余余额，已完成 Intent 不重复执行，旧世代不能写回 |
+| 运行面板与复盘 | 展示预算、角色池占用、状态和调用回执；离线保留快照，支持历史回放与结果导出 |
+| 图节点来源追溯 | 详情显示 Fact 实际产出 harness、Intent 提出/执行 harness、Hint 发出者；旧数据仅按固定配置精确映射，未知不猜测 |
+| 上下文优化 | 固定契约集中交付，角色从短导航和必要节点出发按需读源码与材料；内部哈希、租约和来源运维信息不占据默认研究图 |
 
-## What is Cairn?
+保留普通 generic 项目及原有接口；当前推荐的审计入口是 **原生 Builder Skill + 人工启动的受管理服务**。历史批处理入口仍用于兼容已有自动化。
 
-Penetration testing is fundamentally a **directed search through a near-infinite state space**:
+## 工作流程
 
-- **Origin**: known (target IP, target system)
-- **Goal**: defined (get a shell, capture the flag)
-- **Path**: unknown
-
-This structure is not unique to penetration testing. Vulnerability research, mathematical proof, CTF challenges — any problem with a clear starting point, a clear success condition, and an unknown path in between shares the same shape.
-
-Cairn is built for this class of problems. Penetration testing is the first domain it has been validated on.
-
-The engine is built on a **Blackboard Architecture** with an explicit fact-intent graph. Three primitives are all it needs:
-
-| Concept | Meaning |
-|---------|---------|
-| **Fact** | A confirmed, objective finding written to the board |
-| **Intent** | A declared direction of exploration, not yet executed |
-| **Hint** | Human judgment injected at any time; absorbed by agents on the next read |
-
-The graph grows from `origin` toward `goal`. Every new Fact is a stepping stone; every Intent is a step into the unknown.
-
-Agent Workers run an OODA loop — Observe the full graph, Orient to the current state, Decide on next intents, Act to explore — and write their findings back as new Facts. Workers have no fixed roles. Tasks are generated at runtime from the graph's current state, not from predefined job descriptions.
-
-Agents coordinate exclusively through the shared board (Stigmergy). No direct communication. No information silos.
-
-## Cairn in Action
-
-https://github.com/user-attachments/assets/e557b1ac-dda4-41cb-87dd-9d56dbf05133
-
-
-## How It Works
-
-Three task types, all executed by the same Worker:
-
-| Task | What it does | Output |
-|------|-------------|--------|
-| **Bootstrap** | At project start, attempts to solve the problem directly | Fact + possible Complete |
-| **Reason** | Reads the full graph: is the goal met? What should be explored next? | Complete / new Intents / no-op |
-| **Explore** | Claims one Intent, executes the exploration, reports findings | One Fact |
-
-System architecture:
-
-```
-          ┌──────────────────────────────────┐
-          │           Cairn Server           │
-          │    Facts + Intents + Hints       │
-          └─────────────────┬────────────────┘
-                            │
-                     Read / Write API
-                            │
-          ┌─────────────────┴────────────────┐
-          │             Dispatcher           │
-          │   Schedules tasks, manages       │
-          │   containers, writes protocol    │
-          └──────────┬───────────────┬───────┘
-                     │               │
-     ┌───────────────┴──┐     ┌──────┴──────────────┐
-     │  Worker Container│     │  Worker Container   │
-     │   (Project A)    │     │   (Project B)       │
-     │  ┌────┐  ┌────┐  │     │  ┌────┐  ┌────┐     │
-     │  │ W. │  │ W. │  │     │  │ W. │  │ W. │     │
-     │  └────┘  └────┘  │     │  └────┘  └────┘     │
-     └──────────────────┘     └─────────────────────┘
+```mermaid
+flowchart LR
+    K["Kritt 已完成扫描<br/>PostgreSQL 只读"] --> B["Builder Skill<br/>需求、威胁模型、Goal/policy、取材建图"]
+    B --> P["Preflight / Seed Review"]
+    P --> G[("Fact · Intent · Hint")]
+    G --> R[Reason]
+    R -->|安排 Intent| G
+    G --> E[Explore 资源池]
+    E -->|条件性 Fact 与证据| G
+    G -. 未结 Intent .-> O[Overseer 旁路]
+    O -. Hint 纠偏 .-> G
+    R -->|完成申请| F[独立 Final Review]
+    G --> C[预算收尾 / Closing]
+    C -->|候选申请| F
+    F -->|批准| T[completed]
+    C -->|未达目标| X[budget_exhausted]
 ```
 
-**Cairn Server** maintains graph consistency only.
+Kritt、Cairn 服务由用户手动启动。Builder 可以使用在线服务提交并开始研究，但不负责启动、关闭或重启服务。Kritt 后续扫描不会在已有研究恢复时替换其固定输入。
 
-**Cairn Dispatcher** reads the graph, schedules tasks, spins up and tears down worker containers, and is the sole writer to the protocol. Each project gets its own Worker Container; multiple Agent Workers run concurrently inside it. Agent Workers only receive a prompt and return structured output.
+Overseer 是弱干预旁路；Final Review 是完成验收。完成申请等待终审时会短暂停派新研究，这与旁路监督等待无关。
 
-Workers can also run directly on the dispatcher host instead of in per-project containers — **local mode**, no Docker required. See [Local mode](#local-mode-no-docker) below.
+## 支持的本机 harness
 
-Supported worker backends: **Claude Code**, **Codex**, and **Pi**.
+| 配置键 | 本机命令 | 模型配置 |
+| --- | --- | --- |
+| `claudecode` | `claude` | 沿用 Claude Code 的本机配置 |
+| `grok` | `grok` | 沿用 Grok Build 的本机配置 |
+| `pi` | `pi` | 沿用 Pi 的默认 provider/model/thinking |
+| `codex` | `codex` | 沿用 Codex CLI 的本机配置 |
+| `minimax` | `mcode` | 沿用 MiniMax Code 的本机配置，当前仅支持 local |
 
-## Results
+这些名字代表 harness，不代表固定 LLM。可以通过相应 CLI 或本机模型配置工具选择模型。Cairn 的 `role_pools` 只分配 harness 和数量，不另建模型/凭据管理层。
 
-**Tencent Cloud Hackathon · AI Penetration Testing Challenge · 2nd Edition**
+例如，同一项目最多并发五个 Explore：
 
-610 teams · 1,345 participants · top universities and security firms across China
-
-| Metric | Value |
-|--------|-------|
-| Problems solved | **54 / 54 — only team to AK** |
-| Final ranking | 3rd |
-
-> The system had never been tested before the competition. The full pipeline came online for the first time at 4 AM on race day. No training, no tuning, no domain-specific tooling. Zero MCP tools, zero RAG, zero predefined agent roles.
-
-## Further Reading
-
-- <a href="https://mp.weixin.qq.com/s/DlpEH7bVr0xi0VawPJs3XA" target="_blank" rel="noopener noreferrer">The Strongest AI Penetration Testing Agent: Postmortem of the Only Team to Achieve AK at the TCH Tencent Cloud Hackathon Intelligent Penetration Testing Challenge (2nd Edition)</a>
-- <a href="https://mp.weixin.qq.com/s/2rEqFLvkxvYWM3gW170C2w" target="_blank" rel="noopener noreferrer">The Pathless Path: Cairn AI from Penetration Testing to General Problem Solving</a>
-
-## Getting Started
-
-**Prerequisites**
- 
-- macOS or Linux
-- Python ≥ 3.12
-- Docker (container execution only — not needed for local mode)
-
-
-### Pull required images
- 
-Both setup methods require the worker container image:
- 
-```bash
-docker pull --platform=linux/amd64 ghcr.io/oritera/cairn-worker-container:latest
+```yaml
+role_pools:
+  explore: {claudecode: 1, grok: 1, pi: 1, codex: 1, minimax: 1}
+  reason: {claudecode: 1}
+  preflight: {claudecode: 1}
+  seed_review: {claudecode: 1}
+  overseer: {claudecode: 1}
+  closing: {claudecode: 1}
+  final_review: {claudecode: 1}
 ```
 
-Create your local dispatcher configuration and fill in your LLM endpoints and API keys:
+Reason、Preflight、Closing、Final Review 每项目仍串行；池决定选择哪个执行者。Overseer 名额用于同时观察不同 Intent，不是多票表决。默认示例保持各角色一个 Claude Code，按实际需要调整。
+
+## 快速开始
+
+### 1. 安装与检查本机环境
+
+本地执行使用 Python 与 POSIX 进程管理；开发验证主要在 macOS 完成。准备 Python 3.13、[uv](https://docs.astral.sh/uv/)，以及所选 harness 的已安装、已配置 CLI。运行前在**启动 Cairn 的同一个终端**确认命令可用；桌面应用提供的 PATH 不一定存在于普通终端。
 
 ```bash
-cp dispatch.example.yaml dispatch.yaml
-```
- 
-### Docker Compose (recommended)
- 
-Pull the base image used to build Cairn:
- 
-```bash
-docker pull ghcr.io/astral-sh/uv:python3.13-trixie
-```
- 
-```bash
-docker compose up --build
-```
- 
-This starts `cairn-server` on port `8000` and `cairn-dispatcher` once the server passes its health check. The dispatcher mounts `dispatch.yaml` from the project root and connects to Docker via the host socket. Data is persisted to `./datas/cairn/`.
- 
-### Manual
- 
-```bash
-# Start the server
-uv run --project cairn cairn serve
- 
-# Run the dispatcher
-uv run --project cairn cairn dispatch --config dispatch.yaml
- 
-# Run startup health checks only
-uv run --project cairn cairn dispatch --config dispatch.yaml --startup-healthcheck-only
+git clone https://github.com/Opr4Mp3r/Cairn.git
+cd Cairn
+uv sync --project cairn --group dev --python 3.13
+
+# 已有配置不要覆盖；首次使用时复制示例。
+cp dispatch.service.example.yaml dispatch.service.yaml
+
+# 默认配置使用 Claude Code。
+command -v claude
+claude --help
 ```
 
-### Local mode (no Docker)
+若启用其他 harness，同样检查 `grok`、`pi`、`codex` 或 `mcode`。需要时将其真实安装目录加入当前终端 PATH；本仓库不会自动安装或登录这些 CLI。
 
-Instead of one container per project, workers can run directly on the dispatcher host, reusing the machine's already-configured `claude` / `codex` / `pi` / `grok` / `mcode` CLIs — no Docker, and no API keys in the config. `grok` is Grok Build's headless CLI. `minimax` selects MiniMax Code's `mcode` CLI and currently supports local execution only.
+### 2. 配置审计输入
+
+使用 Kritt 材料时，先由用户完成 Kritt 扫描，再编辑 `dispatch.service.yaml`：
+
+- `controller.kritt.targets`：仓库名、扫描 ID、commit、匹配的本地源码及外置 manifest。
+- 可选 `references`：官方安全文档、部署说明、威胁模型等资料。
+- `role_pools`、任务超时和时间预算：按本次研究需求设置。
+
+配置文件中的相对路径以配置文件所在目录解析。示例目标是占位配置，需要替换为自己的输入。源码版本必须与扫描和 manifest 对应，切换扫描不会自动切换源码。
+
+Kritt 数据库连接使用具有必要 SELECT 权限的账号；不要把密码写进仓库：
 
 ```bash
-cp dispatch.local.example.yaml dispatch.yaml
-
-# Start the server
-uv run --project cairn cairn serve
-
-# Run the dispatcher on the same host, where the CLIs are installed and logged in
-uv run --project cairn cairn dispatch --config dispatch.yaml
+export CAIRN_KRITT_READONLY_DSN='host=127.0.0.1 port=5433 dbname=open_kritt user=YOUR_READONLY_USER'
 ```
 
-Local mode is selected by `runtime.execution: local` (see `dispatch.local.example.yaml`). On startup the dispatcher checks each configured worker CLI is installed and runnable, and reminds you they must already be logged in. Each project gets an isolated working directory under `local.workspace_root` (default: the dispatcher's current directory). Run the dispatcher directly on the host — not inside Docker — since the agents run with your user's permissions and no sandbox.
+也可以使用已有离线视图，格式与准备方式见 [Builder 指南](docs/builder-prepare.md) 和 [Kritt 取材指南](docs/kritt-probe.md)。本仓库不包含 Kritt 服务，也不负责触发其扫描。
 
-### Kritt 与本地审计入口
+### 3. 用户手动启动 Cairn 服务
 
-以项目内的 [cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) 作为 Claude Code 的主交互入口。在本仓库打开 Claude Code，调用 `/cairn-builder` 并说明目标：当前会话补充需求、配置资源池、只读查询 Kritt、阅读源码并保存 AuditPlan。
+```bash
+uv run --project cairn cairn up \
+  --config dispatch.service.yaml \
+  --db-path ./datas/cairn-service/cairn.db
+```
+
+默认服务地址为 `http://127.0.0.1:8000`。端口在 YAML 的 `server` 中设置。确认就绪：
+
+```bash
+curl -s http://127.0.0.1:8000/runtime/health
+```
+
+服务应返回 `managed: true`、`ready: true`。数据库及同级服务目录需要保留；同一数据库只启动一个实例。
+
+### 4. 在 Claude Code 中使用 Builder
+
+在本仓库打开 Claude Code，使用项目内 Skill：
 
 ```text
-/cairn-builder 使用 zentao 目标，静态梳理 module/install/control.php 构造函数的进入和终止条件，列出表达式与行号；部署和匿名可达性未知。
+/cairn-builder 使用我的目标配置，先确认资源池，再基于已完成的 Kritt 扫描建立研究任务；
+静态检查指定入口的调用、终止和鉴权条件，引用源码；部署与匿名可达性未知时保留未知。
 ```
 
-先按 [Builder 使用指南](docs/builder-prepare.md) 配置源码、manifest 和只读连接。Kritt/Cairn 服务由用户手动启动，Builder 只使用已有服务。[在线服务入口](docs/managed-service.md)提供人工 `cairn up` 与纯 HTTP `cairn submit/status/pause/resume`，任务结束后服务继续在线。REC-CP3 已验收，提供网页运行概览、在线暂停/恢复、资源池占用与离线快照。REC-CP4 已验收，Skill 已接入纯客户端 submit/status/pause/resume；旧 `start` 仍由用户手动执行。任务恢复及运行面板进度见[开发方案](docs/specs/task-recovery-mvp.md)。
+Builder 负责需求问答、只读取材、源码阅读、编写 `plan.json`、根据独立预审意见修订，并提交到已启动的 Cairn。也可以只准备方案而不提交。
 
-后台角色使用 [角色资源池](docs/builder-prepare.md#角色资源池)：例如 `explore: {claudecode: 3, grok: 2}` 允许同一项目最多五个 Explore 并行。各角色容量直接由 harness 数量相加，模型与 provider 沿用本机 CLI 配置；原生 Builder 留在当前会话。
-
-| 入口或文档 | 当前用途 |
-|---|---|
-| [原生 cairn-builder Skill](.claude/skills/cairn-builder/SKILL.md) | 资源配置、取材、在线提交与原任务查询/恢复；服务启停由用户手动执行 |
-| [Builder 使用指南](docs/builder-prepare.md) | 准备配置、prepare/submit/status/pause/resume、旧兼容入口和结果复盘 |
-| [在线服务指南](docs/managed-service.md) | 人工 up、纯客户端任务控制、运行面板和旧余额迁移 |
-| [Kritt 取材探针](docs/kritt-probe.md) | 只读查询与源码观察，不创建研究项目 |
-| [本地 audit 模式](docs/audit-local.md) | 已有独立审计路径，包含复核、终审及预算 |
-| [任务恢复与运行面板方案](docs/specs/task-recovery-mvp.md) | REC-CP1/CP2 已验收；REC-CP3 运行面板已验收；REC-CP4 Skill 路由已验收 |
-
-原 `uv run --project cairn cairn builder ...` 保留为已有自动化的批处理兼容入口。其内部 Builder 会话及前台研究生命周期与原生 Skill 入口不同；新交互任务使用 Skill。
-
-Kritt 接回实现背景见 [v0.5 接回方案](docs/specs/kritt-audit-reconnect-mvp.md)，历史 generic 流程见 [正向 MVP 开发约定](docs/specs/kritt-builder-mvp.md)。
-
-### Local code audit MVP（已完成的 audit 路径）
-
-以下命令运行已有源码型审计模式，包含独立批准与 `budget_exhausted`。Kritt 的 R-CP2 入口复用这里的准备、研究和监督语义；R-CP3 已验收通过，包含独立结案、预算收尾与五份结果归档。
-
-The audit controller shares Cairn's worker drivers and runs alongside the Server and Dispatcher. The example uses only an already-configured local Claude Code CLI:
+需要脚本化时，`prepare` 生成输入和 schema，按该 schema 编写 `plan.json` 后再 `submit`：
 
 ```bash
-./scripts/run-audit-local.sh --config dispatch.audit.example.yaml \
-  --repo cairn/tests/fixtures/audit-target \
-  --reference cairn/tests/fixtures/audit-target/SECURITY.md \
-  --goal "核对默认匿名调用 /public 与 /admin 的实际源码行为，记录证据和条件；这是合成夹具，不夸大为高危或 RCE。" \
-  --port 0
+uv run --project cairn cairn prepare \
+  --config dispatch.service.yaml --target YOUR_TARGET \
+  --goal '静态核对入口鉴权条件，保留未知并给出源码证据' \
+  --run-dir /absolute/path/to/new-run
+
+uv run --project cairn cairn submit \
+  --server http://127.0.0.1:8000 \
+  --run-dir /absolute/path/to/new-run \
+  --config dispatch.service.yaml
 ```
 
-The launcher prints the local UI URL and run directory, uses a fresh local database, and stops its own processes when the audit finishes or is interrupted. `completed` requires independent approval; `budget_exhausted` preserves partial results without declaring the goal achieved. See [the local audit guide](docs/audit-local.md) for configuration, saved evidence, and recovery.
+`run-dir` 使用新的目录，放在目标源码之外。`submit --config` 明确提交本次执行快照；省略时使用 prepare 保存的快照。修改 YAML 不会热更新已有任务。
 
-### Tests
-
-Run the fast regression suite without Docker or live model endpoints:
+## 查看、恢复与追溯
 
 ```bash
-uv run --project cairn --group dev pytest
+uv run --project cairn cairn status --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
+uv run --project cairn cairn pause  --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
+uv run --project cairn cairn resume --server http://127.0.0.1:8000 --run-dir /absolute/path/to/run
 ```
 
-## Disclaimer
+服务崩溃后，使用相同配置和数据库手动启动，再显式恢复原项目。已完成的 Intent 保留；未完成的 Intent 使用新会话继续。运行时采用 2 秒心跳、10 秒延迟告警与 60 秒硬失联窗口。
 
-Cairn is a general-purpose problem-solving engine. Although it supports penetration testing, CTF solving, security assessment, and vulnerability research workflows, it is intended to be used only in environments where you have explicit authorization to operate.
+| 位置 | 可查看的材料 |
+| --- | --- |
+| 网页图详情 | Fact 实际产出方、Intent 提出方/执行方、Hint 来源；未知来源明确标注 |
+| `GET /projects/<id>/provenance` | 独立的 harness/Worker 来源 JSON，不加入研究图上下文 |
+| 用户 run 目录 | 原始方案、需求问答、提交定位、修订意见与最终结果 |
+| 服务 `submissions/` | 接纳时的方案、固定材料及执行快照 |
+| 服务工作区 | 各代研究/审核调用回执、原始输出、规划记忆与 Kritt 查询回执 |
+| 结果导出 | `result.json`、`graph.yaml`、`timeline.txt`、`audit.json`、`completions.json` |
 
-You are solely responsible for how you use this project. Do not use Cairn against systems, networks, applications, or data without clear prior permission from the owner or operator. Unauthorized security testing, exploitation, or data access may be illegal and may cause harm.
+历史数据只能还原已经记录的来源，不从 Worker 名字猜测。开题种子作为导入材料，Seed Review 的 harness 不会被当成其原作者。来源字段只记录 harness/Worker，具体模型与 usage 是否出现在原始回执中取决于 CLI。
 
-The developers and contributors of this project do not endorse or accept responsibility for any misuse, abuse, damage, loss, or legal consequences arising from its use. By using this project, you agree to ensure that your activities comply with all applicable laws, regulations, contractual obligations, and professional or organizational policies in your jurisdiction.
+## 验证与边界
 
-## Star History
+当前代码快照的本地记录（2026-10-16）：Python **803 项通过、2 项跳过**，另有 6 个已有弃用警告；前端行为 **30 项通过**。来源功能还使用隔离浏览器核对了 Fact、Intent、Hint、历史回放与离线快照。
 
-<a href="https://www.star-history.com/#oritera/Cairn&Date" target="_blank" rel="noopener noreferrer">
-  <img src="https://api.star-history.com/svg?repos=oritera/Cairn&type=Date" alt="Star History Chart" />
-</a>
+```bash
+uv run --project cairn --group dev pytest cairn/tests -q
+node --test cairn/tests/runtime-panel.test.cjs
+```
 
-## ⚖️ License
-This project is licensed under **GNU AGPLv3** for personal and educational use.
+Pi、Codex、MiniMax 已做真实 CLI 文件读取和会话续接验证。它们不是完整真实目标审计，也不能保证漏洞发现率或结论正确；MiniMax 的部分逐字复述出现末尾换行偏差，失败证据未被重标为通过。
 
-**Commercial Use**: If you wish to use this project in a commercial or proprietary environment without the AGPL-3.0 open-source obligations, **please contact me to obtain a commercial license.**
+当前边界：
 
-**Contributions**: By submitting a Pull Request, you agree that your contributions may be used under both the AGPL-3.0 and the project's commercial license.
+- 已实现时间预算，尚无统一的累计 Token 预算控制。
+- 没有统一的目标应用部署、动态 PoC 执行或正式漏洞报告生成器。
+- Goal/policy、独立终审及旁路 Hint 不能保证模型永不夸大；条件和未知仍须保留。
+- local harness 以当前用户权限无人值守执行，不提供强沙箱；后台 Worker 移除 Kritt DSN 环境变量，但原生 Builder 仍继承宿主环境。
+- 启动终端缺少 CLI 时，当前调度可能把失败任务重新派发；先修复 PATH，不能以 App 内的调用结果代替正式终端检查。
+- 来源功能会为旧库添加可空字段并保留数据；回退旧代码前应使用相应版本的数据库备份，旧版本不能直接写已升级的 Hint 表。
+
+本仓库用于自有或已获授权的源码审查与研究。
+
+## 文档与开发记录
+
+- [二开提交记录](DEVELOPMENT.md)
+- [Builder 使用与资源池](docs/builder-prepare.md)
+- [人工服务、暂停恢复与运行面板](docs/managed-service.md)
+- [Kritt 只读取材](docs/kritt-probe.md)
+- [本地审计兼容入口](docs/audit-local.md)
+- [组合研究设计](docs/specs/kritt-cairn-compositional-research.md)
+- [上下文最小改造方案](docs/specs/audit-context-minimal-refactor.md)
+- [审计节点表达示例](docs/specs/audit-context-examples.md)
+- [任务恢复设计](docs/specs/task-recovery-mvp.md)
+
+## 致谢与许可证
+
+原始引擎来自 [oritera/Cairn](https://github.com/oritera/Cairn)。原作者和上游贡献者的代码、提交与许可证均保留；本 Fork 的新增记录继续追加在该历史上。
+
+项目沿用 [GNU AGPLv3](LICENSE)。上游介绍及授权说明见 [基线原版 README](README.upstream.md)；上游原有容器/通用探索用法也可在那里查阅。
