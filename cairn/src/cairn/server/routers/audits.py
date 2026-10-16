@@ -121,7 +121,7 @@ def create_audit(body: CreateAuditRequest, request: Request,
             _insert_intent(conn, project_id, [mapping[ref] for ref in intent.from_], intent.description, body.creator, now)
         for hint in body.hints:
             hint_id = next_hint_id(conn, project_id)
-            conn.execute("INSERT INTO hints VALUES (?, ?, ?, ?, ?)", (hint_id, project_id, hint.content, hint.creator, now))
+            conn.execute("INSERT INTO hints (id, project_id, content, creator, created_at) VALUES (?, ?, ?, ?, ?)", (hint_id, project_id, hint.content, hint.creator, now))
         metadata = AuditMetadata(
             project_id=project_id, repo_path=str(repo), workspace_root=str(workspace_root),
             baseline=body.baseline, user_goal=body.user_goal, policy=body.policy,

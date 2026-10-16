@@ -246,7 +246,8 @@ def _supervise_once(config, client, backend, project_id, cancellation):
                 record_key=(f"overseer:g{project.project.runtime_generation}:intent:{object_id}:{inputs['input_digest']}:{attempts + 1}"
                             if project.project.runtime_generation is not None else f"overseer:intent:{object_id}:{inputs['input_digest']}:{attempts + 1}"),
                 object_type="intent", object_id=object_id, input_digest=inputs["input_digest"], phase="overseer",
-                session=None if failed else result.session, attempt_status="success" if success else "error",
+                session=None if failed else result.session, worker=None if failed else result.worker,
+                harness=None if failed else result.harness, attempt_status="success" if success else "error",
                 decision=data.decision if data else None,
                 error=str(result) if failed else None if success else result.error or result.status,
                 result=None if failed else result.data, artifacts=[str(artifact)] if artifact else [], hint=data.hint if data else None,
@@ -336,7 +337,7 @@ def _final_reviews(config, client, backend, project, cancellation, retry_review)
         assessment = FinalAssessment.model_validate(result.data) if success else None
         record = AuditRecordRequest(
             record_key=f"final_review:{request.id}:{request.review_token}", object_type="project", object_id=project_id,
-            input_digest=request.proof_digest, phase="final_review", session=result.session,
+            input_digest=request.proof_digest, phase="final_review", session=result.session, worker=result.worker, harness=result.harness,
             attempt_status="success" if success else "error", decision=assessment.decision if assessment else None,
             error=None if success else result.error or result.status, result=result.data, artifacts=[str(artifact)],
         )
@@ -437,7 +438,7 @@ def _closing_once(config, client, backend, project, cancellation):
         success = result.status == "success"
         record = AuditRecordRequest(
             record_key=f"closing:{closing.token}", object_type="project", object_id=project_id,
-            input_digest=closing.input_digest, phase="closing", session=result.session,
+            input_digest=closing.input_digest, phase="closing", session=result.session, worker=result.worker, harness=result.harness,
             attempt_status="success" if success else "error", error=None if success else result.error or result.status,
             result=result.data, artifacts=[str(artifact)],
         )

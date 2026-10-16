@@ -344,7 +344,7 @@ def prepare_audit(config: DispatchConfig, client: CairnClient, backend: LocalBac
         success = result.status == "success"
         record = AuditRecordRequest(
             record_key=f"{run_dir.name}:{index}:{phase}", object_type="project", object_id=project.project.id,
-            input_digest=json_digest(payload), phase=phase, session=result.session, attempt_status="success" if success else "error",
+            input_digest=json_digest(payload), phase=phase, session=result.session, worker=result.worker, harness=result.harness, attempt_status="success" if success else "error",
             error=None if success else result.error or result.status,
             decision=("approved" if result.data["approved"] else "rejected") if success and phase.startswith("preflight") else None,
             result=result.data, artifacts=[str(artifact)],

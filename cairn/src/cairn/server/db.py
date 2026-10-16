@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS intents (
     description TEXT NOT NULL,
     creator TEXT NOT NULL,
     worker TEXT,
+    creator_harness TEXT,
+    worker_harness TEXT,
     last_heartbeat_at TEXT,
     created_at TEXT NOT NULL,
     concluded_at TEXT,
@@ -63,6 +65,8 @@ CREATE TABLE IF NOT EXISTS hints (
     content TEXT NOT NULL,
     creator TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    worker TEXT,
+    harness TEXT,
     PRIMARY KEY (id, project_id)
 );
 
@@ -152,6 +156,7 @@ def configure(path: Path) -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         _ensure_project_columns(conn)
+        _ensure_provenance_columns(conn)
 
 
 def _ensure_project_columns(conn: sqlite3.Connection) -> None:
@@ -164,6 +169,15 @@ def _ensure_project_columns(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "UPDATE projects SET bootstrap_enabled = CASE WHEN bootstrap_mode = 'disabled' THEN 0 ELSE 1 END"
             )
+
+
+def _ensure_provenance_columns(conn: sqlite3.Connection) -> None:
+    for table, additions in (("intents", ("creator_harness", "worker_harness")),
+                             ("hints", ("worker", "harness"))):
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column in additions:
+            if column not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
 
 
 @contextmanager

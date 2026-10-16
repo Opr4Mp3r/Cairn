@@ -162,11 +162,12 @@ class CairnClient:
         response.raise_for_status()
         return response.text
 
-    def heartbeat(self, project_id: str, intent_id: str, worker: str, lease_id: str | None = None) -> ApiResult:
+    def heartbeat(self, project_id: str, intent_id: str, worker: str, lease_id: str | None = None, *, harness: str | None = None) -> ApiResult:
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents/{intent_id}/heartbeat",
-            json={"worker": worker, **({"lease_id": lease_id} if lease_id else {})},
+            json={"worker": worker, **({"lease_id": lease_id} if lease_id else {}),
+                  **({"harness": harness} if harness is not None else {})},
         )
 
     def claim_reason(self, project_id: str, worker: str, trigger: str) -> ApiResult:
@@ -200,35 +201,40 @@ class CairnClient:
     def set_project_status(self, project_id: str, status: str) -> ApiResult:
         return self._request_json("PUT", f"/projects/{project_id}/status", {"status": status})
 
-    def conclude(self, project_id: str, intent_id: str, worker: str, description: str, audit=None, lease_id=None) -> ApiResult:
+    def conclude(self, project_id: str, intent_id: str, worker: str, description: str, audit=None, lease_id=None, *, harness: str | None = None) -> ApiResult:
         payload = {"worker": worker, "description": description}
         if audit is not None:
             payload["audit"] = audit.model_dump(mode="json")
         if lease_id is not None:
             payload["lease_id"] = lease_id
+        if harness is not None:
+            payload["harness"] = harness
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents/{intent_id}/conclude",
             json=payload,
         )
 
-    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str, source_session: str | None = None, lease_id=None) -> ApiResult:
+    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str, source_session: str | None = None, lease_id=None, *, harness: str | None = None) -> ApiResult:
         payload = {"from": from_ids, "description": description, "worker": worker}
         if source_session is not None:
             payload["source_session"] = source_session
         if lease_id is not None:
             payload["lease_id"] = lease_id
+        if harness is not None:
+            payload["harness"] = harness
         return self._request_json(
             "POST",
             f"/projects/{project_id}/complete",
             json=payload,
         )
 
-    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:
+    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str, *, harness: str | None = None) -> ApiResult:
         return self._request_json(
             "POST",
             f"/projects/{project_id}/intents",
-            json={"from": from_ids, "description": description, "creator": creator, "worker": None},
+            json={"from": from_ids, "description": description, "creator": creator, "worker": None,
+                  **({"harness": harness} if harness is not None else {})},
         )
 
     def _request_json(self, method: str, path: str, json: dict[str, Any]) -> ApiResult:

@@ -261,6 +261,8 @@ build 时限只用于旧批处理 Builder，不限制原生会话问答。业务
 
 从 result.json 的终态与 completions.json 的独立批准开始，沿图和时间线找到 Fact 的生产 Intent，核对 audit.json 的证据/条件，再看对应世代的调用和 Kritt 查询回执。没有 approved 完成申请不能声称目标达成。日志面板显示保存回执，不是 CLI 内部步骤直播；历史产物与数据库应一并保留。
 
+网页中选择 Fact 或 Intent，在详情里可查看明确记录的 harness 和 Worker，Hint 卡片也会显示来源。Intent 的提出者与 Fact 的产出者可能不同；输入和导入材料不认定为研究 Agent 的产出。缺少明确历史映射时显示“未记录”。如需保留单独的来源快照，读取在线服务的 `GET /projects/PROJECT_ID/provenance`；来源不混入图正文、提示词或原有图导出。
+
 ## 人工旧兼容入口
 
 旧 start / builder 仍管理自己的服务生命周期，仅供用户在终端手动执行，原生 Skill 不调用它们。已有在线执行服务时优先使用 submit，避免重复启动。

@@ -20,6 +20,10 @@ function cairnRuntimePanel() {
     runtimeLogsRequest: 0,
     isOpeningProject: false,
     graphSnapshotReady: false,
+    provenanceProjectId: null,
+    provenance: null,
+    provenanceRequest: 0,
+    provenanceError: '',
 
     setConnectionState(state) {
       this.connectionState = state;
@@ -88,6 +92,48 @@ function cairnRuntimePanel() {
       this.runtimeByProject[projectId] = data;
       if (projectId === this.selectedProjectId) this.lastSnapshotAt = data.updated_at;
       return data;
+    },
+
+    async loadProvenance(projectId) {
+      if (this.connectionState !== 'online') return;
+      if (this.provenanceProjectId !== projectId) {
+        this.provenanceProjectId = projectId;
+        this.provenance = null;
+      }
+      this.provenanceError = '';
+      const request = ++this.provenanceRequest, navigation = this.projectNavigation;
+      const database = this.databaseId, service = this.serviceHealth?.service_id;
+      const current = () => request === this.provenanceRequest && navigation === this.projectNavigation &&
+        projectId === this.selectedProjectId && projectId === this.project?.project?.id &&
+        database === this.databaseId && service === this.serviceHealth?.service_id && this.connectionState === 'online';
+      try {
+        const data = await this.api('GET', `/projects/${projectId}/provenance`);
+        if (current()) this.provenance = data;
+      } catch (e) {
+        if (current()) this.provenanceError = e.message;
+      }
+    },
+
+    provenanceRows(collection, id) {
+      const node = this.project?.[collection]?.find(item => item.id === id);
+      if (!node || this.project.project.id !== this.selectedProjectId) return [];
+      const sameProject = this.provenanceProjectId === this.selectedProjectId;
+      const source = sameProject ? this.provenance?.[collection]?.[id] : null;
+      if (!source) return [{ label: '来源', value: sameProject && this.provenanceError ? '来源读取失败' : 'Harness 未记录' }];
+      const actor = value => value
+        ? `${value.harness || 'Harness 未记录'} · Worker ${value.worker || '未记录'}` : 'Harness / Worker 未记录';
+      const kind = { input: '项目输入（非研究产出）', import: '开题导入（原作者未记录）', feedback: '外部反馈（原作者未记录）' };
+      if (collection !== 'intents') return [{ label: kind[source.kind] ? '来源' : collection === 'facts' ? 'Fact 产出来源' : 'Hint 来源',
+        value: kind[source.kind] || actor(source.producer) }];
+      const rows = [kind[source.kind] ? { label: '来源', value: kind[source.kind] } :
+        { label: source.kind === 'completion' ? '完成节点创建方' : 'Intent 提出来源', value: actor(source.creator) }];
+      // Replay only exposes the executor after its running/concluded frame.
+      if ((node.worker || node.to) && (!kind[source.kind] || source.executor)) {
+        const executor = node.worker && source.executor?.worker !== node.worker
+          ? { worker: node.worker, harness: null } : source.executor;
+        rows.push({ label: source.kind === 'completion' ? '验收 / 完成写入' : 'Intent 执行来源', value: actor(executor) });
+      }
+      return rows;
     },
 
     runtimeFor(projectId = this.selectedProjectId) {

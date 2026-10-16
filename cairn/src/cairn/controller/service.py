@@ -63,7 +63,7 @@ class ManagedService:
         row = conn.execute("SELECT status FROM projects WHERE id=?", (project_id,)).fetchone()
         if row and row[0] in ("active", "draining", "stopped"):
             conn.execute("UPDATE projects SET status='stopped' WHERE id=?", (project_id,))
-            conn.execute("UPDATE intents SET worker=NULL WHERE project_id=? AND to_fact_id IS NULL", (project_id,))
+            conn.execute("UPDATE intents SET worker=NULL, worker_harness=NULL WHERE project_id=? AND to_fact_id IS NULL", (project_id,))
             clear_project_reason(conn, project_id)
 
     def start(self):

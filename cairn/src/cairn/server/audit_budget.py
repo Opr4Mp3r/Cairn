@@ -51,7 +51,7 @@ def advance_budget(conn, project_id: str, *, finalize: bool = False):
         metadata.phase = "draining"
         conn.execute("UPDATE projects SET status='draining' WHERE id=?", (project_id,))
     if metadata.phase == "draining" and (now >= clock.drain_end or not live_leases(conn, project_id)):
-        conn.execute("UPDATE intents SET worker=NULL WHERE project_id=? AND to_fact_id IS NULL", (project_id,))
+        conn.execute("UPDATE intents SET worker=NULL, worker_harness=NULL WHERE project_id=? AND to_fact_id IS NULL", (project_id,))
         services.clear_project_reason(conn, project_id)
         metadata.phase = "finalizing"
     if now >= clock.final_end:

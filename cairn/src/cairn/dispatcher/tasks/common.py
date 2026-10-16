@@ -126,6 +126,7 @@ def write_conclude_result(
     total_ms: int | None = None,
     audit=None,
     lease_id=None,
+    harness: str | None = None,
 ) -> str:
     return write_conclude_result_with_fact_id(
         client,
@@ -138,6 +139,7 @@ def write_conclude_result(
         total_ms=total_ms,
         audit=audit,
         lease_id=lease_id,
+        harness=harness,
     ).status
 
 
@@ -153,10 +155,13 @@ def write_conclude_result_with_fact_id(
     total_ms: int | None = None,
     audit=None,
     lease_id=None,
+    harness: str | None = None,
 ) -> ConcludeWriteResult:
     kwargs = {"audit": audit} if audit is not None else {}
     if lease_id:
         kwargs["lease_id"] = lease_id
+    if harness is not None:
+        kwargs["harness"] = harness
     response = client.conclude(project_id, intent_id, worker_name, description, **kwargs)
     if response.ok:
         fact_id: str | None = None

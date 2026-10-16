@@ -203,6 +203,7 @@ def run_bootstrap_task(
                 audit=audit,
                 source_session=session if project.project.mode == "audit" else None,
                 lease_id=intent.lease_id,
+                harness=worker.type,
             )
         if did_timeout(first):
             LOG.warning(
@@ -401,7 +402,7 @@ def _try_conclude_fallback(
         fact_description,
         source="bootstrap_conclude",
         phase_ms=conclude_ms,
-        audit=audit, lease_id=intent.lease_id,
+        audit=audit, lease_id=intent.lease_id, harness=worker.type,
     )
 
 
@@ -449,6 +450,7 @@ def _write_bootstrap_complete_result(
     audit=None,
     source_session=None,
     lease_id=None,
+    harness: str | None = None,
 ) -> str:
     conclude = write_conclude_result_with_fact_id(
         client,
@@ -459,7 +461,7 @@ def _write_bootstrap_complete_result(
         source=source,
         phase_ms=phase_ms,
         total_ms=total_ms,
-        audit=audit, lease_id=lease_id,
+        audit=audit, lease_id=lease_id, harness=harness,
     )
     if conclude.status != "success":
         return "failed"
@@ -476,6 +478,8 @@ def _write_bootstrap_complete_result(
     kwargs = {"source_session": source_session} if source_session is not None else {}
     if lease_id:
         kwargs["lease_id"] = lease_id
+    if harness is not None:
+        kwargs["harness"] = harness
     response = client.complete(project_id, [conclude.fact_id], complete_description, worker_name, **kwargs)
     if response.status_code in (403, 409):
         LOG.info(

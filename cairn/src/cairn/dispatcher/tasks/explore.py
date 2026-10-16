@@ -197,7 +197,7 @@ def run_explore_task(
                 source="explore_execute",
                 phase_ms=execute_ms,
                 total_ms=int((time.perf_counter() - task_started) * 1000),
-                audit=audit, lease_id=intent.lease_id,
+                audit=audit, lease_id=intent.lease_id, harness=worker.type,
             )
         if did_timeout(first):
             LOG.warning(
@@ -387,7 +387,7 @@ def _try_conclude_fallback(
         description,
         source="explore_conclude",
         phase_ms=conclude_ms,
-        audit=audit, lease_id=intent.lease_id,
+        audit=audit, lease_id=intent.lease_id, harness=worker.type,
     )
 
 

@@ -50,7 +50,7 @@ def create_intent(project_id: str, body: CreateIntentRequest):
         iid = next_intent_id(conn, project_id)
         claimed = body.worker is not None
         conn.execute(
-            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL)",
+            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at, creator_harness, worker_harness) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?)",
             (
                 iid,
                 project_id,
@@ -59,6 +59,8 @@ def create_intent(project_id: str, body: CreateIntentRequest):
                 body.worker,
                 now if claimed else None,
                 now,
+                body.harness,
+                body.harness if claimed else None,
             ),
         )
         for fid in body.from_:
@@ -104,8 +106,8 @@ def heartbeat(project_id: str, intent_id: str, body: HeartbeatRequest):
 
         now = utcnow()
         conn.execute(
-            "UPDATE intents SET worker = ?, last_heartbeat_at = ? WHERE id = ? AND project_id = ?",
-            (body.worker, now, intent_id, project_id),
+            "UPDATE intents SET worker = ?, worker_harness = ?, last_heartbeat_at = ? WHERE id = ? AND project_id = ?",
+            (body.worker, body.harness or (row["worker_harness"] if row["worker"] == body.worker else None), now, intent_id, project_id),
         )
 
         updated = conn.execute(
@@ -131,7 +133,7 @@ def release(project_id: str, intent_id: str, body: HeartbeatRequest):
 
         if row["worker"] == body.worker:
             conn.execute(
-                "UPDATE intents SET worker = NULL WHERE id = ? AND project_id = ?",
+                "UPDATE intents SET worker = NULL, worker_harness = NULL WHERE id = ? AND project_id = ?",
                 (intent_id, project_id),
             )
             row = conn.execute(
@@ -179,8 +181,8 @@ def conclude(project_id: str, intent_id: str, body: ConcludeRequest):
         if audit is not None:
             conn.execute("INSERT INTO audit_facts VALUES (?, ?, ?)", (project_id, fid, json_text(audit.model_dump(mode="json"))))
         conn.execute(
-            "UPDATE intents SET to_fact_id = ?, worker = ?, last_heartbeat_at = ?, concluded_at = ? WHERE id = ? AND project_id = ?",
-            (fid, body.worker, now, now, intent_id, project_id),
+            "UPDATE intents SET to_fact_id = ?, worker = ?, worker_harness = ?, last_heartbeat_at = ?, concluded_at = ? WHERE id = ? AND project_id = ?",
+            (fid, body.worker, body.harness or (claimed["worker_harness"] if claimed["worker"] == body.worker else None), now, now, intent_id, project_id),
         )
         bump_audit_revision(conn, project_id, reason=True)
 

@@ -166,7 +166,7 @@ def test_late_attempt_cannot_replace_previous_plan(harness, late):
 def test_failed_action_does_not_save_successful_plan(harness):
     project, client, workspace, _, _, run = harness
     assert run(action("keep this plan")) == "success"
-    client.create_intent = lambda *_a: ApiResult(500, text="write failed")
+    client.create_intent = lambda *_a, **_kw: ApiResult(500, text="write failed")
     assert run(action("uncommitted plan")) == "failed"
     memory = load_memory(project, str(workspace))
     assert memory["previous_plan"]["planning_notes"] == "keep this plan"
@@ -178,7 +178,7 @@ def test_partial_intent_write_keeps_plan_and_passes_failure_to_next_round(harnes
     project, client, workspace, driver, _, run = harness
     assert run(action("keep the completed plan")) == "success"
     replies = iter([ApiResult(201, {}), ApiResult(status, text="second Intent failed")])
-    client.create_intent = lambda *_a: next(replies)
+    client.create_intent = lambda *_a, **_kw: next(replies)
     payload = action("both requested directions were queued")
     payload["data"]["intents"].append({"from": ["f001"], "description": "missing direction B"})
     assert run(payload) == "success"  # Keep the existing partial-success dispatch outcome.

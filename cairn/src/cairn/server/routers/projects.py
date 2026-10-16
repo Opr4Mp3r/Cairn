@@ -203,7 +203,7 @@ def update_project_status(project_id: str, body: UpdateProjectStatusRequest, req
         )
         if body.status == "stopped":
             conn.execute(
-                "UPDATE intents SET worker = NULL WHERE project_id = ? AND concluded_at IS NULL",
+                "UPDATE intents SET worker = NULL, worker_harness = NULL WHERE project_id = ? AND concluded_at IS NULL",
                 (project_id,),
             )
             clear_project_reason(conn, project_id)
@@ -308,8 +308,8 @@ def complete_project(project_id: str, body: CompleteRequest, response: Response)
         iid = next_intent_id(conn, project_id)
 
         conn.execute(
-            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at) VALUES (?, ?, 'goal', ?, ?, ?, ?, ?, ?)",
-            (iid, project_id, body.description, body.worker, body.worker, now, now, now),
+            "INSERT INTO intents (id, project_id, to_fact_id, description, creator, worker, last_heartbeat_at, created_at, concluded_at, creator_harness, worker_harness) VALUES (?, ?, 'goal', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (iid, project_id, body.description, body.worker, body.worker, now, now, now, body.harness, body.harness),
         )
         for fid in body.from_:
             conn.execute(

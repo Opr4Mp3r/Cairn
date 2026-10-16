@@ -191,7 +191,7 @@ def invalidate_calls(conn, metadata):
                          (json.dumps(request), metadata.project_id, row["id"]))
     from cairn.server.services import save_audit_metadata, clear_project_reason
     save_audit_metadata(conn, metadata)
-    conn.execute("UPDATE intents SET worker=NULL WHERE project_id=? AND to_fact_id IS NULL", (metadata.project_id,))
+    conn.execute("UPDATE intents SET worker=NULL, worker_harness=NULL WHERE project_id=? AND to_fact_id IS NULL", (metadata.project_id,))
     clear_project_reason(conn, metadata.project_id)
 
 

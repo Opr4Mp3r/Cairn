@@ -314,7 +314,7 @@ def expire_workers(conn: sqlite3.Connection, project_id: str | None = None) -> N
     now = utcnow()
     query = """
         UPDATE intents
-        SET worker = NULL
+        SET worker = NULL, worker_harness = NULL
         WHERE to_fact_id IS NULL
           AND worker IS NOT NULL
           AND last_heartbeat_at IS NOT NULL

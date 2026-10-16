@@ -85,7 +85,7 @@ def make_pool_loop(project_ids):
         "get_project": lambda self, project_id: projects[project_id],
         "export_project": lambda self, project_id: "graph",
         "claim_reason": lambda self, *args: ApiResult(200, {}),
-        "heartbeat": lambda self, *args: ApiResult(200, {}),
+        "heartbeat": lambda self, *args, **kwargs: ApiResult(200, {}),
     })()
     return loop
 

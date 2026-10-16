@@ -201,7 +201,7 @@ def add_fact(audit, *, sources, name):
 
 def successful(data, artifact, session="independent"):
     artifact.write_text("{}")
-    return SimpleNamespace(status="success", data=data, session=session, error=None), artifact
+    return SimpleNamespace(status="success", data=data, session=session, error=None, worker="fixture-reviewer", harness="claudecode"), artifact
 
 
 def test_overseer_runs_only_open_intents_in_configured_parallel_slots(audit, tmp_path, monkeypatch):

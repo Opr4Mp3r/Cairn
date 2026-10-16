@@ -205,8 +205,8 @@ def apply_node_review(conn, metadata: AuditMetadata, body: AuditRecordRequest) -
     if body.hint:
         if not body.hint.strip():
             raise HTTPException(400, "Hint must not be blank")
-        conn.execute("INSERT INTO hints VALUES (?, ?, ?, ?, ?)",
-                     (next_hint_id(conn, metadata.project_id), metadata.project_id, body.hint, "overseer", utcnow()))
+        conn.execute("INSERT INTO hints (id, project_id, content, creator, created_at, worker, harness) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (next_hint_id(conn, metadata.project_id), metadata.project_id, body.hint, "overseer", utcnow(), body.worker, body.harness))
         changed = reason_changed = True
     if changed:
         bump_audit_revision(conn, metadata.project_id, reason=reason_changed)
@@ -390,9 +390,9 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
         control_window(conn, metadata)
         edge = next_intent_id(conn, metadata.project_id)
         now = utcnow()
-        conn.execute("INSERT INTO intents (id,project_id,to_fact_id,description,creator,worker,last_heartbeat_at,created_at,concluded_at) "
-                     "VALUES (?,?,'goal',?,?,?,?,?,?)",
-                     (edge, metadata.project_id, "独立终审通过：" + body.assessment.reason, "audit-controller", "final-reviewer", now, now, now))
+        conn.execute("INSERT INTO intents (id,project_id,to_fact_id,description,creator,worker,last_heartbeat_at,created_at,concluded_at,worker_harness) "
+                     "VALUES (?,?,'goal',?,?,?,?,?,?,?)",
+                     (edge, metadata.project_id, "独立终审通过：" + body.assessment.reason, "audit-controller", body.record.worker or "final-reviewer", now, now, now, body.record.harness))
         conn.executemany("INSERT INTO intent_sources VALUES (?, ?, ?)",
                          [(edge, metadata.project_id, fact_id) for fact_id in request.from_])
         conn.execute("UPDATE projects SET status='completed' WHERE id=?", (metadata.project_id,))
@@ -417,9 +417,9 @@ def finish_completion(conn, metadata: AuditMetadata, request: AuditCompletion, b
         request.decision = body.assessment.decision
         request.error = None
         if request.status in ("rejected", "needs_evidence"):
-            conn.execute("INSERT INTO hints VALUES (?, ?, ?, ?, ?)",
+            conn.execute("INSERT INTO hints (id, project_id, content, creator, created_at, worker, harness) VALUES (?, ?, ?, ?, ?, ?, ?)",
                          (next_hint_id(conn, metadata.project_id), metadata.project_id,
-                          f"独立终审 {request.status}：{body.assessment.reason}", "final-reviewer", utcnow()))
+                          f"独立终审 {request.status}：{body.assessment.reason}", "final-reviewer", utcnow(), body.record.worker, body.record.harness))
             bump_audit_revision(conn, metadata.project_id, reason=True)
     _save_completion(conn, request)
     return request

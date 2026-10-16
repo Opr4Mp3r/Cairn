@@ -752,6 +752,9 @@
                   <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="fact.description"></p>
                   <p x-show="fact.audit" class="text-xs text-sky-700" x-text="`证据状态：${fact.audit?.review_status || 'unverified'}`"></p>
                   <div class="text-xs text-slate-400 space-y-1.5">
+                    <template x-for="row in provenanceRows('facts', fact.id)" :key="row.label">
+                      <p class="break-all" x-text="`${row.label}：${row.value}`"></p>
+                    </template>
                     <template x-if="fact.id === 'origin'">
                       <p>Project starting point</p>
                     </template>
@@ -782,6 +785,18 @@
             </div>
             <div class="p-4 space-y-4">
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="selectedFactRecord().description"></p>
+              <div class="text-xs text-slate-500 space-y-1.5">
+                <template x-for="row in provenanceRows('facts', selectedFactId())" :key="row.label">
+                  <p class="break-all" x-text="`${row.label}：${row.value}`"></p>
+                </template>
+                <template x-if="selectedFactId() === 'goal' && selectedFactProducingIntent()">
+                  <div>
+                    <template x-for="row in provenanceRows('intents', selectedFactProducingIntent().id)" :key="row.label">
+                      <p class="break-all" x-text="`${row.label}：${row.value}`"></p>
+                    </template>
+                  </div>
+                </template>
+              </div>
               <template x-if="selectedFactRecord().audit">
                 <div class="text-xs space-y-2 break-words">
                   <p class="font-semibold text-sky-700" x-text="`证据状态：${selectedFactRecord().audit.review_status}`"></p>
@@ -839,6 +854,11 @@
             </div>
             <div class="p-4 space-y-4">
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="selectedIntentRecord().description"></p>
+              <div class="text-xs text-slate-500 space-y-1.5">
+                <template x-for="row in provenanceRows('intents', selectedIntentId())" :key="row.label">
+                  <p class="break-all" x-text="`${row.label}：${row.value}`"></p>
+                </template>
+              </div>
               <div class="pt-4 border-t border-slate-100 space-y-3 text-xs">
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">From</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().from.join(', ')"></span></div>
                 <div class="flex items-start justify-between gap-3"><span class="text-slate-400 shrink-0">To</span><span class="font-mono text-slate-600 text-right break-all" x-text="selectedIntentRecord().to || '—'"></span></div>
@@ -876,6 +896,9 @@
             </div>
             <div class="p-4">
               <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words" x-text="h.content"></p>
+              <template x-for="row in provenanceRows('hints', h.id)" :key="row.label">
+                <p class="mt-2 text-[11px] text-slate-500 break-all" x-text="`${row.label}：${row.value}`"></p>
+              </template>
             </div>
           </button>
         </template>
@@ -1826,6 +1849,7 @@ function cairnApp() {
         this.auditRequests = requests;
         this.auditLoadError = auditError;
         this.graphSnapshotReady = true;
+        void this.loadProvenance(id);
         this.lastSnapshotAt = this.runtimeFor(id)?.updated_at || new Date().toISOString();
         return true;
       } catch(e) {

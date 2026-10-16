@@ -251,6 +251,8 @@ class CreateProjectRequest(BaseModel):
 class CreateHintRequest(BaseModel):
     content: str
     creator: str
+    worker: str | None = Field(default=None, min_length=1)
+    harness: str | None = Field(default=None, min_length=1)
 
     @field_validator("content", "creator")
     @classmethod
@@ -262,6 +264,7 @@ class CreateHintRequest(BaseModel):
 
 
 class CreateIntentRequest(BaseModel):
+    harness: str | None = Field(default=None, min_length=1)
     from_: list[str] = Field(alias="from", min_length=1)
     description: str
     creator: str
@@ -293,6 +296,7 @@ class CreateIntentRequest(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     worker: str
+    harness: str | None = Field(default=None, min_length=1)
     lease_id: str | None = None
 
     @field_validator("worker")
@@ -319,6 +323,7 @@ class ReasonClaimRequest(BaseModel):
 
 class ConcludeRequest(BaseModel):
     worker: str
+    harness: str | None = Field(default=None, min_length=1)
     description: str
     audit: AuditFactData | None = None
     lease_id: str | None = None
@@ -333,6 +338,7 @@ class ConcludeRequest(BaseModel):
 
 
 class CompleteRequest(BaseModel):
+    harness: str | None = Field(default=None, min_length=1)
     from_: list[str] = Field(alias="from", min_length=1)
     description: str
     worker: str
@@ -463,6 +469,9 @@ class CreateAuditRequest(BaseModel):
 
 class AuditRecordRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    worker: str | None = Field(default=None, min_length=1)
+    harness: str | None = Field(default=None, min_length=1)
 
     record_key: str = Field(min_length=1)
     object_type: Literal["project", "fact", "intent"]

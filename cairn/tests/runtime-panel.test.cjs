@@ -489,3 +489,168 @@ test('real historical intent_running frame animates even when its live project i
     assert.ok(instance.cy.edges('[status="in_progress"]').some(e => e.animated()));
   } finally { instance.cy.elements().stop(true, false); instance.cy.destroy(); }
 });
+
+function provenanceProject(instance, id = 'p') {
+  instance.selectedProjectId = id;
+  instance.project = { project: { id, mode: 'generic', reason: null },
+    facts: [{ id: 'origin' }, { id: 'goal' }, { id: 'f1' }, { id: 'seed' }],
+    intents: [{ id: 'i1', creator: 'planner', worker: 'runner', to: 'f1' }], hints: [{ id: 'h1' }] };
+  instance.provenanceProjectId = id;
+  instance.provenance = {
+    facts: { origin: { kind: 'input', producer: null }, goal: { kind: 'input', producer: null },
+      f1: { kind: 'research', producer: { worker: 'runner', harness: 'codex' } },
+      seed: { kind: 'import', producer: null } },
+    intents: { i1: { kind: 'research', creator: { worker: 'planner', harness: 'grok' },
+      executor: { worker: 'runner', harness: 'codex' } } },
+    hints: { h1: { kind: 'hint', producer: { worker: 'observer', harness: 'pi' } } },
+  };
+}
+
+test('provenance separates Intent proposal, Fact production, Hint, and imported input', () => {
+  const { instance } = app();
+  provenanceProject(instance);
+  const intentRows = instance.provenanceRows('intents', 'i1');
+  assert.equal(intentRows[0].label, 'Intent 提出来源');
+  assert.match(intentRows[0].value, /grok.*planner/);
+  assert.match(intentRows[1].value, /codex.*runner/);
+  assert.match(instance.provenanceRows('facts', 'f1')[0].value, /codex.*runner/);
+  assert.match(instance.provenanceRows('hints', 'h1')[0].value, /pi.*observer/);
+  assert.equal(instance.provenanceRows('facts', 'origin')[0].value, '项目输入（非研究产出）');
+  assert.equal(instance.provenanceRows('facts', 'seed')[0].value, '开题导入（原作者未记录）');
+  instance.provenance.intents.i1.kind = 'completion';
+  assert.equal(instance.provenanceRows('intents', 'i1')[1].label, '验收 / 完成写入');
+  instance.provenance.intents.i1.creator = { worker: 'audit-controller', harness: null };
+  instance.provenance.intents.i1.executor = { worker: 'final-review-grok', harness: 'grok' };
+  instance.project.intents[0].worker = 'final-review-grok';
+  assert.equal(instance.provenanceRows('intents', 'i1')[0].label, '完成节点创建方');
+  assert.equal(instance.provenanceRows('intents', 'i1')[0].value, 'Harness 未记录 · Worker audit-controller');
+  assert.equal(instance.provenanceRows('intents', 'i1')[1].value, 'grok · Worker final-review-grok');
+  instance.provenance.intents.i1.executor = { worker: 'runner', harness: 'codex' };
+  instance.project.intents[0].worker = 'runner';
+  assert.equal(instance.project.facts[2].provenance, undefined);
+  instance.provenance.intents.i1.kind = 'import';
+  assert.match(instance.provenanceRows('intents', 'i1')[0].value, /开题导入/);
+  assert.match(instance.provenanceRows('intents', 'i1')[1].value, /codex.*runner/);
+  instance.provenance.intents.i1.executor = null;
+  assert.equal(instance.provenanceRows('intents', 'i1').length, 1);
+});
+
+test('provenance never infers a harness from worker names and preserves literal text', () => {
+  const { instance } = app();
+  provenanceProject(instance);
+  instance.provenance.facts.f1.producer = { worker: 'pool-explore-codex', harness: null };
+  assert.equal(instance.provenanceRows('facts', 'f1')[0].value, 'Harness 未记录 · Worker pool-explore-codex');
+  instance.provenance.facts.f1.producer = { worker: '<img src=x onerror=alert(1)>', harness: 'custom' };
+  assert.match(instance.provenanceRows('facts', 'f1')[0].value, /<img src=x onerror=alert\(1\)>/);
+  const html = fs.readFileSync(path.join(__dirname, '../src/cairn/server/static/index.html'), 'utf8');
+  assert.ok(html.includes('x-text="`${row.label}：${row.value}`"'));
+  assert.equal(html.includes('x-html="`${row.label}：${row.value}`"'), false);
+  instance.provenance = null;
+  assert.equal(instance.provenanceRows('facts', 'f1')[0].value, 'Harness 未记录');
+});
+
+test('replay only exposes provenance for visible nodes and the reached execution phase', () => {
+  const { instance } = app();
+  provenanceProject(instance);
+  const source = instance.cloneData(instance.project);
+  Object.assign(source.intents[0], { from: ['origin'], description: 'Research', created_at: '2026-10-16T00:00:00Z',
+    concluded_at: '2026-10-16T00:01:00Z' });
+  const frames = instance.buildReplayFrames(source, [{ type: 'project_created' },
+    { type: 'intent_declared', intentId: 'i1', order: '1' }, { type: 'intent_concluded', intentId: 'i1' }]);
+  instance.replay.active = true;
+  instance.project = frames[0].project;
+  assert.equal(instance.provenanceRows('intents', 'i1').length, 0);
+  assert.equal(instance.provenanceRows('facts', 'f1').length, 0);
+  assert.equal(instance.provenanceRows('hints', 'h1').length, 0);
+  instance.project = frames.find(frame => frame.event.type === 'intent_declared').project;
+  assert.equal(instance.provenanceRows('intents', 'i1').length, 1);
+  assert.match(instance.provenanceRows('intents', 'i1')[0].value, /grok/);
+  instance.project = frames.find(frame => frame.event.type === 'intent_running').project;
+  assert.equal(instance.provenanceRows('intents', 'i1').length, 2);
+  assert.equal(instance.provenanceRows('facts', 'f1').length, 0);
+  instance.project = frames.find(frame => frame.event.type === 'intent_concluded').project;
+  assert.match(instance.provenanceRows('facts', 'f1')[0].value, /codex/);
+});
+
+test('a slow optional provenance read does not block graph loading', async () => {
+  const { instance, loadProject } = app();
+  instance.loadProject = loadProject;
+  const gate = deferred(), entered = deferred();
+  instance.api = async (_method, url) => {
+    if (url.endsWith('/provenance')) { entered.resolve(); return gate.promise; }
+    return { project: { id: 'p', mode: 'generic' }, facts: [{ id: 'f1' }], intents: [], hints: [] };
+  };
+  assert.equal(await instance.loadProject('p'), true);
+  await entered.promise;
+  assert.equal(instance.graphSnapshotReady, true);
+  assert.equal(instance.project.project.id, 'p');
+  assert.equal(instance.provenance, null);
+  gate.resolve({ facts: {} });
+  await Promise.resolve();
+});
+
+test('late provenance and failures cannot replace a different project source', async () => {
+  const { instance } = app();
+  provenanceProject(instance, 'A');
+  const gate = deferred(), entered = deferred();
+  instance.api = async (_method, url) => {
+    if (url.includes('/A/')) { entered.resolve(); return gate.promise; }
+    throw new Error('unavailable');
+  };
+  const old = instance.loadProvenance('A');
+  await entered.promise;
+  instance.selectedProjectId = 'B';
+  instance.project = { project: { id: 'B' }, facts: [{ id: 'f1' }], intents: [], hints: [] };
+  await instance.loadProvenance('B');
+  assert.equal(instance.provenance, null);
+  assert.equal(instance.provenanceRows('facts', 'f1')[0].value, '来源读取失败');
+  gate.resolve({ facts: { f1: { kind: 'research', producer: { harness: 'old', worker: 'A' } } } });
+  await old;
+  assert.equal(instance.provenance, null);
+  assert.equal(instance.provenanceError, 'unavailable');
+});
+
+test('newer same-project provenance wins and offline keeps only that project snapshot', async () => {
+  const { instance } = app();
+  provenanceProject(instance);
+  const gate = deferred(), entered = deferred();
+  let calls = 0;
+  instance.api = async () => {
+    if (++calls === 1) { entered.resolve(); return gate.promise; }
+    return { facts: { f1: { kind: 'research', producer: { harness: 'pi', worker: 'new' } } } };
+  };
+  const old = instance.loadProvenance('p');
+  await entered.promise;
+  await instance.loadProvenance('p');
+  gate.resolve({ facts: { f1: { kind: 'research', producer: { harness: 'codex', worker: 'old' } } } });
+  await old;
+  assert.match(instance.provenanceRows('facts', 'f1')[0].value, /pi.*new/);
+  instance.connectionState = 'offline';
+  instance.api = async () => { throw new Error('must not request offline'); };
+  await instance.loadProvenance('p');
+  assert.match(instance.provenanceRows('facts', 'f1')[0].value, /pi.*new/);
+  instance.selectedProjectId = 'another';
+  assert.equal(instance.provenanceRows('facts', 'f1').length, 0);
+});
+
+
+test('a stale execution source does not attribute a newly claimed worker to the prior harness', () => {
+  const { instance } = app();
+  provenanceProject(instance);
+  instance.project.intents[0].worker = 'new-worker';
+  instance.project.intents[0].to = null;
+  assert.equal(instance.provenanceRows('intents', 'i1')[1].value, 'Harness 未记录 · Worker new-worker');
+});
+
+test('provenance responses from before a service change cannot replace its last snapshot', async () => {
+  const { instance } = app();
+  provenanceProject(instance);
+  const gate = deferred(), entered = deferred();
+  instance.api = async () => { entered.resolve(); return gate.promise; };
+  const pending = instance.loadProvenance('p');
+  await entered.promise;
+  instance.serviceHealth.service_id = 'new-service';
+  gate.resolve({ facts: { f1: { kind: 'research', producer: { harness: 'wrong', worker: 'late' } } } });
+  await pending;
+  assert.match(instance.provenanceRows('facts', 'f1')[0].value, /codex.*runner/);
+});

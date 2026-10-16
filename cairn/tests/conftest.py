@@ -117,18 +117,23 @@ class FakeClient:
     released: list[tuple[str, str, str]] = field(default_factory=list)
     released_reasons: list[tuple[str, str]] = field(default_factory=list)
 
+    provenance_calls: list[tuple[str, str, str | None]] = field(default_factory=list)
+
     def get_project(self, _project_id: str) -> ProjectDetail:
         return self.project
 
-    def conclude(self, project_id: str, intent_id: str, worker: str, description: str) -> ApiResult:
+    def conclude(self, project_id: str, intent_id: str, worker: str, description: str, *, harness: str | None = None) -> ApiResult:
+        self.provenance_calls.append(("conclude", worker, harness))
         self.concluded.append((project_id, intent_id, worker, description))
         return ApiResult(200, {"fact": {"id": "f002"}})
 
-    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str) -> ApiResult:
+    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str, *, harness: str | None = None) -> ApiResult:
+        self.provenance_calls.append(("complete", worker, harness))
         self.completed.append((project_id, from_ids, description, worker))
         return ApiResult(200, {})
 
-    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:
+    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str, *, harness: str | None = None) -> ApiResult:
+        self.provenance_calls.append(("create_intent", creator, harness))
         self.created_intents.append((project_id, from_ids, description, creator))
         return ApiResult(201, {})
 
@@ -140,7 +145,8 @@ class FakeClient:
         self.released_reasons.append((project_id, worker))
         return ApiResult(200, {})
 
-    def heartbeat(self, _project_id: str, _intent_id: str, _worker: str) -> ApiResult:
+    def heartbeat(self, _project_id: str, _intent_id: str, _worker: str, *, harness: str | None = None) -> ApiResult:
+        self.provenance_calls.append(("heartbeat", _worker, harness))
         return ApiResult(200, {})
 
     def reason_heartbeat(self, _project_id: str, _worker: str) -> ApiResult:

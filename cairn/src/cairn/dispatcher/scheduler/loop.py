@@ -556,7 +556,7 @@ class DispatcherLoop:
             )
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:bootstrap")
-        claim = self.client.heartbeat(project.project.id, intent.id, worker.name)
+        claim = self.client.heartbeat(project.project.id, intent.id, worker.name, harness=worker.type)
         if claim.status_code in (403, 409):
             level = logging.INFO if claim.status_code == 403 else logging.WARNING
             LOG.log(
@@ -617,7 +617,7 @@ class DispatcherLoop:
             return False
         self._clear_log_state(f"project:{project.project.id}:worker:explore")
         execution_client = self._execution_client(project)
-        claim = execution_client.heartbeat(project.project.id, intent.id, worker.name)
+        claim = execution_client.heartbeat(project.project.id, intent.id, worker.name, harness=worker.type)
         if claim.status_code in (403, 409):
             level = logging.INFO if claim.status_code == 403 else logging.WARNING
             LOG.log(

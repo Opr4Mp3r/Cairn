@@ -225,7 +225,7 @@ def run_reason_task(
             kwargs = {"source_session": session} if project.project.mode == "audit" else {}
             if lease_id:
                 kwargs["lease_id"] = lease_id
-            response = client.complete(project.project.id, data["from"], data["description"], worker.name, **kwargs)
+            response = client.complete(project.project.id, data["from"], data["description"], worker.name, harness=worker.type, **kwargs)
             if response.status_code == 403:
                 LOG.info("project became inactive during reason complete project=%s worker=%s", project.project.id, worker.name)
                 return "success"
@@ -251,7 +251,7 @@ def run_reason_task(
             created = 0
             write_errors = []
             for intent_data in data:
-                response = client.create_intent(project.project.id, intent_data["from"], intent_data["description"], worker.name)
+                response = client.create_intent(project.project.id, intent_data["from"], intent_data["description"], worker.name, harness=worker.type)
                 if response.status_code == 403:
                     LOG.info("project became inactive during reason intent create project=%s worker=%s created=%s", project.project.id, worker.name, created)
                     return "success"

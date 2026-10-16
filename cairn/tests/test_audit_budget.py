@@ -235,7 +235,8 @@ def test_monitor_final_graph_generates_candidate_then_independent_approval(audit
         data = {"kind": "candidate", "from": ["f001"], "description": "existing verified result"} if kwargs["phase"] == "closing" else assessment()
         artifact = tmp_path / (kwargs["phase"] + ".json")
         artifact.write_text("{}")
-        return SimpleNamespace(status="success", data=data, session="session-" + kwargs["phase"], error=None), artifact
+        return SimpleNamespace(status="success", data=data, session="session-" + kwargs["phase"], error=None,
+                               worker="claude-main", harness="claudecode"), artifact
     monkeypatch.setattr(monitor, "_invoke", invoke)
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
     result = monitor.monitor_once(config, client, backend, pid)
@@ -473,7 +474,8 @@ def test_monitor_restore_assesses_new_snapshot_instead_of_old_no_candidate(audit
         data = {"kind": "candidate", "from": ["f001"], "description": "new supported evidence"} if phase == "closing" else assessment()
         artifact = tmp_path / (phase + ".json")
         artifact.write_text("{}")
-        return SimpleNamespace(status="success", data=data, session="repaired-" + phase, error=None), artifact
+        return SimpleNamespace(status="success", data=data, session="repaired-" + phase, error=None,
+                               worker="claude-main", harness="claudecode"), artifact
     monkeypatch.setattr(monitor, "_invoke", invoke)
     backend = LocalBackend(LocalConfig(workspace_root=config.local.workspace_root))
     result = monitor.monitor_once(config, client, backend, pid)

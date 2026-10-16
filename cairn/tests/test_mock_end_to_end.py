@@ -49,8 +49,9 @@ class InProcessClient:
         response.raise_for_status()
         return response.text
 
-    def heartbeat(self, project_id: str, intent_id: str, worker: str) -> ApiResult:
-        return self._post(f"/projects/{project_id}/intents/{intent_id}/heartbeat", {"worker": worker})
+    def heartbeat(self, project_id: str, intent_id: str, worker: str, *, harness: str | None = None) -> ApiResult:
+        return self._post(f"/projects/{project_id}/intents/{intent_id}/heartbeat",
+                          {"worker": worker, **({"harness": harness} if harness is not None else {})})
 
     def claim_reason(self, project_id: str, worker: str, trigger: str) -> ApiResult:
         return self._post(f"/projects/{project_id}/reason/claim", {"worker": worker, "trigger": trigger})
@@ -64,22 +65,24 @@ class InProcessClient:
     def release(self, project_id: str, intent_id: str, worker: str) -> ApiResult:
         return self._post(f"/projects/{project_id}/intents/{intent_id}/release", {"worker": worker})
 
-    def conclude(self, project_id: str, intent_id: str, worker: str, description: str) -> ApiResult:
+    def conclude(self, project_id: str, intent_id: str, worker: str, description: str, *, harness: str | None = None) -> ApiResult:
         return self._post(
             f"/projects/{project_id}/intents/{intent_id}/conclude",
-            {"worker": worker, "description": description},
+            {"worker": worker, "description": description, **({"harness": harness} if harness is not None else {})},
         )
 
-    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str) -> ApiResult:
+    def complete(self, project_id: str, from_ids: list[str], description: str, worker: str, *, harness: str | None = None) -> ApiResult:
         return self._post(
             f"/projects/{project_id}/complete",
-            {"from": from_ids, "description": description, "worker": worker},
+            {"from": from_ids, "description": description, "worker": worker,
+             **({"harness": harness} if harness is not None else {})},
         )
 
-    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str) -> ApiResult:
+    def create_intent(self, project_id: str, from_ids: list[str], description: str, creator: str, *, harness: str | None = None) -> ApiResult:
         return self._post(
             f"/projects/{project_id}/intents",
-            {"from": from_ids, "description": description, "creator": creator, "worker": None},
+            {"from": from_ids, "description": description, "creator": creator, "worker": None,
+             **({"harness": harness} if harness is not None else {})},
         )
 
     def _post(self, path: str, payload: dict[str, Any]) -> ApiResult:
