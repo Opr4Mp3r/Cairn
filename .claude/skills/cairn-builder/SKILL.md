@@ -33,9 +33,9 @@ python3 /absolute/path/to/cairn/.claude/skills/cairn-builder/scripts/cairn.py
 
 展示各角色的 harness 和数量。用户未明确本次选择时主动问一次是否沿用或调整；已经说“沿用”“其余默认”或给出完整选择时不重复确认。无资源池时提出七个角色各 `claudecode: 1`；未决定的名额保持待定，不自行增加并发或提交任务。
 
-按答复直接保存 `explore/reason/preflight/seed_review/overseer/closing/final_review` 七个角色，每项使用 `claudecode/grok/pi/codex` 与正整数数量。移除项就删除，不写 0；每个角色至少一种。角色容量等于各数量之和，不另设总上限，不手写内部 workers。Reason、Preflight、Closing、Final Review 每项目仍串行。Overseer 数量表示可并发观察的 Intent 数，不是同一结论的投票数，也不必与 Explore 数量相等。
+按答复直接保存 `explore/reason/preflight/seed_review/overseer/closing/final_review` 七个角色，每项使用 `claudecode/grok/pi/codex/minimax` 与正整数数量。移除项就删除，不写 0；每个角色至少一种。角色容量等于各数量之和，不另设总上限，不手写内部 workers。Reason、Preflight、Closing、Final Review 每项目仍串行。Overseer 数量表示可并发观察的 Intent 数，不是同一结论的投票数，也不必与 Explore 数量相等。
 
-用项目 Python 的 `DispatchConfig.load` 检查能否加载，只展示资源池与合计，不输出整份配置或凭据。用所选 CLI 的 `--help` 确认命令可用：`claudecode` 对应 `claude`，其余为同名命令；`pi` 指 Pi Coding Agent。此检查不证明账号／模型可调用。模型、provider、登录、代理沿用本机 CLI/CCSwitch，不在 Cairn 重配或修改全局设置。当前 Builder 会话不占后台池名额。
+用项目 Python 的 `DispatchConfig.load` 检查能否加载，只展示资源池与合计，不输出整份配置或凭据。用所选 CLI 的 `--help` 确认命令可用：`claudecode` 对应 `claude`，`minimax` 对应 MiniMax Code 的 `mcode`，其余为同名命令；`pi` 指 Pi Coding Agent。`minimax` 仅支持 local 执行。此检查不证明账号／模型可调用。模型、provider、登录、代理沿用本机 CLI/CCSwitch，不在 Cairn 重配或修改全局设置。当前 Builder 会话不占后台池名额。
 
 prepare 使用刚保存的配置；把资源池问答追加到新 run 的 `requirements.json.messages`。修改 YAML 不代表在线服务热加载；submit 的 `--config` 明确把这份执行快照随任务提交。已有运行沿用原池，本轮不热修改恢复任务的配置。
 

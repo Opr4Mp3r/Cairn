@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 
 TaskType = Literal["reason", "explore", "bootstrap"]
 PoolRole = Literal["reason", "explore", "bootstrap", "build", "preflight", "seed_review", "overseer", "closing", "final_review"]
-WorkerType = Literal["claudecode", "codex", "pi", "grok", "mock"]
+WorkerType = Literal["claudecode", "codex", "pi", "grok", "minimax", "mock"]
 RolePools = dict[PoolRole, Annotated[dict[WorkerType, Annotated[int, Field(strict=True, gt=0)]], Field(min_length=1)]]
 CompletedAction = Literal["remove", "stop"]
 WorkerHealthcheckMode = Literal["startup_and_task", "startup_only", "disabled"]
@@ -409,7 +409,10 @@ class DispatchConfig(BaseModel):
         if self.runtime.execution == "container":
             if self.container is None:
                 raise ValueError("container config is required when runtime.execution is container")
+            from cairn.dispatcher.workers.registry import get_driver
+
             for worker in self.workers:
+                get_driver(worker.type, self.runtime.execution)
                 required = WORKER_ENV_KEYS[worker.type]
                 missing = [key for key in required if not worker.env.get(key)]
                 if missing:

@@ -46,7 +46,7 @@ export CAIRN_KRITT_READONLY_DSN='host=127.0.0.1 port=5433 dbname=open_kritt user
 
 Skill 只调整所选文件的 `role_pools`，保留已有目标、Kritt、预算和超时，展示最终分配与合计，并说明 prepare 及在线提交所用的配置路径。新运行会把有关问答记入 `requirements.json`。修改本地 YAML 不会使已在线服务自动生效；纯客户端随任务提交资源池快照。恢复已有任务跳过资源池问答，沿用它保存的配置和余额；本轮不热更新。
 
-资源池用于 `runtime.execution: local`。可选 `claudecode`、`grok`、`pi`、`codex`，对应本机命令 `claude`、`grok`、`pi`、`codex`；研究与 Controller 角色共用这些适配器。示例默认所有角色各用一个 `claudecode`；所选 CLI 已在启动 Cairn 的终端 PATH 中可用且完成登录／模型配置时，可混用：
+资源池用于 `runtime.execution: local`。可选 `claudecode`、`grok`、`pi`、`codex`、`minimax`，对应本机命令 `claude`、`grok`、`pi`、`codex`、`mcode`；研究与 Controller 角色共用这些适配器。示例默认所有角色各用一个 `claudecode`；所选 CLI 已在启动 Cairn 的终端 PATH 中可用且完成登录／模型配置时，可混用：
 
 ```yaml
 role_pools:
@@ -70,7 +70,7 @@ Explore 有五个名额：同一项目的待研究 Intent 足够时，最多同�
 
 原生 Builder 使用当前 Claude Code 会话，不在后台资源池中。后台每次任务使用独立 session；同次调用的格式修复或 Explore 收尾使用原 harness 与 session。服务中断后的项目恢复沿用原图和资源池，为未完成 Intent 新建 session。各 harness 的模型、provider 和登录由用户通过 CCSwitch 或本机 CLI 管理，`role_pools` 不配置 `model`。
 
-可先在启动 Cairn 的终端运行所选命令的 `--help` 确认安装和 PATH；它不验证账号或模型可用性。Pi 指 Pi Coding Agent 的 `pi` 命令；Codex 指 Codex CLI 的 `codex` 命令。Cairn 以非交互模式调用它们，沿用本机配置，不安装 CLI 或改写全局登录、模型与代理设置。
+可先在启动 Cairn 的终端运行所选命令的 `--help` 确认安装和 PATH；它不验证账号或模型可用性。Pi 指 Pi Coding Agent 的 `pi` 命令；Codex 指 Codex CLI 的 `codex` 命令；`minimax` 指 MiniMax Code 的 `mcode` 命令，当前仅支持 local 执行。MiniMax 后台调用固定使用 `mcode --permission full`，工具无人值守执行；模型、provider 和登录仍沿用本机配置。Cairn 以非交互模式调用它们，沿用本机配置，不安装 CLI 或改写全局登录、模型与代理设置。
 
 容量直接等于该角色各 harness 数量之和，没有额外的角色总并发字段。资源池模式自动生成内部 Worker 和调度容量，无需再写 `workers`、`controller.roles`、`runtime.max_workers` 或 `runtime.max_project_workers`；`runtime.max_running_projects` 仍控制同时运行的项目数，示例保留为 `1`。
 

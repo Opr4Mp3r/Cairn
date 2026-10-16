@@ -1,6 +1,7 @@
 # Local execution example — workers run directly on the dispatcher host and reuse the
-# machine's already-configured claude / codex / pi / grok CLIs. No API keys, base URLs or models
+# machine's configured claude / codex / pi / grok / mcode CLIs. No API keys, base URLs or models
 # are configured here; each CLI uses its own host configuration and credentials.
+# Worker type minimax invokes MiniMax Code (mcode), supported only in local mode.
 #
 # Usage:
 #   cp dispatch.local.example.yaml dispatch.yaml

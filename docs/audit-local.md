@@ -12,7 +12,7 @@
 uv sync --project cairn --group dev --python 3.13
 ```
 
-默认示例要求本机 `claude` 已登录并能够从终端直接执行任务。也可选 `grok`、`pi`（Pi Coding Agent）或 `codex`（Codex CLI）；所选命令须在启动 Cairn 的终端 PATH 中可用，`--help` 可检查安装和参数。账号和模型由本机 CLI 管理，Cairn 不改写全局登录或模型配置。示例为 local 模式，不需要 Docker 或 open-kritt。
+默认示例要求本机 `claude` 已登录并能够从终端直接执行任务。也可选 `grok`、`pi`（Pi Coding Agent）、`codex`（Codex CLI）或 `minimax`（MiniMax Code，命令为 `mcode`，仅支持 local）；所选命令须在启动 Cairn 的终端 PATH 中可用，`--help` 可检查安装和参数。账号和模型由本机 CLI 管理，Cairn 不改写全局登录或模型配置。示例为 local 模式，不需要 Docker 或 open-kritt。
 
 `dispatch.audit.example.yaml` 定义一个 Claude Worker，builder 和 reviewer 都引用它；每次控制器阶段使用独立 session。研究和控制器通过共享 Driver、进程执行函数调用 CLI，审核状态、policy 和预算保存在 Cairn 数据库。
 
@@ -35,7 +35,7 @@ uv sync --project cairn --group dev --python 3.13
 
 ## 配置和期限
 
-可以复制示例为自己的配置，继续通过 `workers` 与 `controller.roles` 选择 Agent。控制器与研究共用 `claudecode/grok/pi/codex` 适配器；使用 `role_pools` 时可按角色混合 harness，容量为各数量之和，不另设总上限。完整配置见 [Builder 资源池说明](builder-prepare.md#角色资源池)。默认示例仍使用 claudecode，配置可加载不等于本机账号和模型已经可调用。
+可以复制示例为自己的配置，继续通过 `workers` 与 `controller.roles` 选择 Agent。控制器与研究共用 `claudecode/grok/pi/codex/minimax` 适配器；使用 `role_pools` 时可按角色混合 harness，容量为各数量之和，不另设总上限。完整配置见 [Builder 资源池说明](builder-prepare.md#角色资源池)。默认示例仍使用 claudecode，配置可加载不等于本机账号和模型已经可调用。
 
 - `runtime.prompt_group` 用于 generic 项目，示例保持 default；`controller.research_prompt_group` 为审计研究使用 audit。
 - `controller.timeouts` 限制构建、预审、种子复核、Overseer、closing 和终审的单次时间。示例不是调用耗时保证，模型和本机负载会影响实际结果。

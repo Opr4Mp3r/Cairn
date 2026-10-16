@@ -26,7 +26,7 @@ from pathlib import Path
 args = sys.argv[1:]
 harness = Path(sys.argv[0]).name
 resume = args[2] if harness == "codex" and args[:2] == ["exec", "resume"] else None
-if harness == "pi" and "--session" in args:
+if harness in ("pi", "mcode") and "--session" in args:
     resume = args[args.index("--session") + 1]
 session = resume or str(uuid.uuid4())
 with open(os.environ["CAIRN_TEST_TRACE"], "a") as trace:
@@ -43,13 +43,25 @@ if harness == "codex":
     emit({"type": "item.completed", "item": {"type": "command_execution", "aggregated_output": text}})
     emit({"type": "item.completed", "item": {"type": "agent_message", "phase": "final_answer", "text": text}})
     emit({"type": "turn.failed", "error": {"message": "fixture failure"}} if failed else {"type": "turn.completed"})
-else:
+elif harness == "pi":
     assert args[args.index("--mode") + 1] == "json"
     emit({"type": "session", "id": session})
     emit({"type": "agent_start"})
     message = {"role": "assistant", "content": [{"type": "text", "text": text}], "stopReason": "error" if failed else "stop"}
     emit({"type": "turn_end", "message": message})
     emit({"type": "agent_end", "messages": [message]})
+else:
+    assert args[0] == "exec"
+    assert args[args.index("--output-format") + 1] == "stream-json"
+    assert args[args.index("--permission") + 1] == "full"
+    identity = {"schemaVersion": 1, "runId": "run-1", "sessionId": session, "turnId": "turn-1"}
+    emit({**identity, "type": "exec.started"})
+    emit({**identity, "type": "session.resumed" if resume else "session.started"})
+    emit({**identity, "type": "turn.started"})
+    emit({**identity, "type": "item.completed", "item": {"type": "tool_call", "content": text}})
+    emit({**identity, "type": "turn.failed" if failed else "turn.completed"})
+    result = {**identity, "type": "exec.result", "status": "failed" if failed else "succeeded", "output": text, "durationMs": 1}
+    emit({**identity, "type": "exec.completed", "result": result})
 '''
 
 
@@ -57,7 +69,7 @@ else:
 def native_clis(tmp_path, monkeypatch):
     folder = tmp_path / "bin"
     folder.mkdir()
-    for name in ("pi", "codex"):
+    for name in ("pi", "codex", "mcode"):
         binary = folder / name
         binary.write_text(f"#!{sys.executable}\n" + CLI)
         binary.chmod(0o755)
@@ -80,9 +92,10 @@ def calls(trace):
     return [json.loads(line) for line in trace.read_text().splitlines()]
 
 
-def test_controller_mixed_pool_resumes_on_original_harness(native_clis, tmp_path, monkeypatch):
+@pytest.mark.parametrize("harnesses", [("pi", "codex"), ("pi", "minimax", "codex")])
+def test_controller_mixed_pool_resumes_on_original_harness(native_clis, tmp_path, monkeypatch, harnesses):
     data = config_for("pi").model_dump()
-    data["role_pools"] = {role: {"pi": 1, "codex": 1} for role in (
+    data["role_pools"] = {role: dict.fromkeys(harnesses, 1) for role in (
         "explore", "reason", "preflight", "seed_review", "overseer", "closing", "final_review",
     )}
     config = DispatchConfig.model_validate(data)
@@ -94,18 +107,19 @@ def test_controller_mixed_pool_resumes_on_original_harness(native_clis, tmp_path
             result_model=FileReadResult, workspace=tmp_path, timeout_seconds=10,
             phase="preflight_format_repair" if session else "preflight", session=session)
 
-    first, second = invoke(), invoke()
-    continued_first, continued_second, third = invoke(first.session), invoke(second.session), invoke()
-    results = [first, second, continued_first, continued_second, third]
+    fresh = [invoke() for _ in harnesses]
+    resumed = [invoke(item.session) for item in fresh]
+    next_call = invoke()
+    results = [*fresh, *resumed, next_call]
     assert all(item.status == "success" for item in results)
-    assert [item.harness for item in results] == ["pi", "codex", "pi", "codex", "pi"]
-    assert continued_first.session == first.session and continued_second.session == second.session
-    assert len({first.session, second.session, third.session}) == 3
+    assert [item.harness for item in results] == [*harnesses, *harnesses, harnesses[0]]
+    assert [item.session for item in resumed] == [item.session for item in fresh]
+    assert len({item.session for item in [*fresh, next_call]}) == len(harnesses) + 1
     assert all(item.data == {"path": "/fixture", "content": "observed"} for item in results)
     assert all("--model" not in item["argv"] and "--provider" not in item["argv"] for item in calls(native_clis))
 
 
-@pytest.mark.parametrize("harness", ["pi", "codex"])
+@pytest.mark.parametrize("harness", ["pi", "codex", "minimax"])
 def test_research_cli_conclude_uses_exact_session(native_clis, tmp_path, monkeypatch, harness):
     monkeypatch.setenv("CAIRN_TEST_ANSWER", json.dumps({"accepted": True, "data": {"description": "native fact"}}))
     monkeypatch.setenv("CAIRN_TEST_NEEDS_RESUME", "1")
@@ -120,10 +134,13 @@ def test_research_cli_conclude_uses_exact_session(native_clis, tmp_path, monkeyp
     assert client.concluded == [("proj_001", "i001", "test-worker", "native fact")]
     invocations = calls(native_clis)
     assert len(invocations) == 2 and invocations[0]["session"] == invocations[1]["session"]
-    assert ("--session" in invocations[1]["argv"]) if harness == "pi" else invocations[1]["argv"][:2] == ["exec", "resume"]
+    if harness in ("pi", "minimax"):
+        assert "--session" in invocations[1]["argv"]
+    else:
+        assert invocations[1]["argv"][:2] == ["exec", "resume"]
 
 
-@pytest.mark.parametrize("harness", ["pi", "codex"])
+@pytest.mark.parametrize("harness", ["pi", "codex", "minimax"])
 def test_research_reason_accepts_final_message(native_clis, tmp_path, monkeypatch, harness):
     monkeypatch.setenv("CAIRN_TEST_ANSWER", json.dumps({"accepted": True, "data": {
         "intents": [{"from": ["f001"], "description": "inspect the remaining condition"}],
@@ -139,7 +156,7 @@ def test_research_reason_accepts_final_message(native_clis, tmp_path, monkeypatc
     assert client.created_intents[0][2] == "inspect the remaining condition"
 
 
-@pytest.mark.parametrize("harness", ["pi", "codex"])
+@pytest.mark.parametrize("harness", ["pi", "codex", "minimax"])
 def test_native_failure_never_becomes_controller_or_research_success(native_clis, tmp_path, monkeypatch, harness):
     monkeypatch.setenv("CAIRN_TEST_FAILED", "1")
     monkeypatch.setenv("CAIRN_TEST_ANSWER", json.dumps({"path": "/fixture", "content": "false success"}))

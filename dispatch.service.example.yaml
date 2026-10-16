@@ -18,7 +18,7 @@ tasks:
     timeout: 300
     conclude_timeout: 60
 # 各角色容量等于其 harness 数量之和；模型沿用本机 CLI 配置。
-# 可选 claudecode / grok / pi / codex，所选 CLI 须已安装并完成本机配置。
+# 可选 claudecode / grok / pi / codex / minimax（命令 mcode，仅 local），CLI 须已完成本机配置。
 # 混合示例：explore: {claudecode: 2, grok: 1, pi: 1, codex: 1}，合计 5。
 # 下方默认分配不变；新任务 submit --config 保存本任务池，已有任务恢复沿用原池。
 role_pools:
